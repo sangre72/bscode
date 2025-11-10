@@ -1,3 +1,11 @@
+import {
+  API_ENDPOINTS,
+  ERROR_MESSAGES,
+  PROJECT_ANALYSIS_SYSTEM_PROMPT,
+  getGrokApiKey,
+  getModelConfig,
+  getOllamaUrl
+} from "@/utils/modelConfig";
 import { promises as fs } from "fs";
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
@@ -192,10 +200,7 @@ async function generateProjectProfileInteractive(
   provider: "grok" | "ollama",
   maxIterations: number = 5
 ): Promise<{ profile: string; conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> }> {
-  const apiKey = process.env.GROK_API_KEY;
-  if (!apiKey) {
-    throw new Error("GROK_API_KEY가 설정되지 않았습니다.");
-  }
+  // API 키는 필요할 때 검증
 
   const treeText = treeToText(fileTree);
   const fileList = flattenFileList(fileTree);
@@ -211,7 +216,7 @@ async function generateProjectProfileInteractive(
   const conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     {
       role: "system",
-      content: "You are a project analysis assistant. Analyze project structures and create detailed project profiles in Korean. You will receive project structure information step by step and should request additional files when needed. Based on the file structure, identify the project type (Java/Spring, Python/Flask/Django, Node.js/Next.js/React, Go, Rust, C/C++, etc.) and request relevant configuration files and source files.",
+      content: PROJECT_ANALYSIS_SYSTEM_PROMPT,
     },
     {
       role: "user",
@@ -313,12 +318,12 @@ ${fileListText}
     let assistantMessage = "";
     
     if (provider === "grok") {
-      const apiKey = process.env.GROK_API_KEY;
-      if (!apiKey) {
-        throw new Error("GROK_API_KEY가 설정되지 않았습니다.");
-      }
+      const apiKey = getGrokApiKey();
 
-      const response = await fetch("https://api.x.ai/v1/chat/completions", {
+      // 모델별 설정 가져오기 (통합 관리)
+      const modelConfig = getModelConfig(model, "analysis");
+
+      const response = await fetch(API_ENDPOINTS.GROK, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -327,20 +332,20 @@ ${fileListText}
         body: JSON.stringify({
           model: model,
           messages: conversationHistory,
-          temperature: 0.3,
-          max_tokens: 4000,
+          temperature: modelConfig.temperature,
+          max_tokens: modelConfig.maxTokens,
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`LLM API 호출 실패: ${response.status} - ${errorText}`);
+        throw new Error(ERROR_MESSAGES.LLM_API_CALL_FAILED(response.status, errorText));
       }
 
       const data = await response.json();
       assistantMessage = data.choices[0]?.message?.content || "";
     } else if (provider === "ollama") {
-      const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434";
+      const ollamaUrl = getOllamaUrl();
       
       // Ollama 형식으로 메시지 변환
       const ollamaMessages = conversationHistory.map(msg => ({
@@ -365,7 +370,7 @@ ${fileListText}
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Ollama API 호출 실패: ${response.status} - ${errorText}`);
+        throw new Error(ERROR_MESSAGES.LLM_API_CALL_FAILED(response.status, errorText));
       }
 
       const data = await response.json();

@@ -1134,6 +1134,321 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
     scrollToBottom();
   }, [messages]);
 
+  // 질문 감지 함수
+  const checkForQuestions = (response: string, structuredResponse: any): boolean => {
+    // 구조화된 응답에서 질문 확인
+    if (structuredResponse?.questions && structuredResponse.questions.length > 0) {
+      return true;
+    }
+    
+    // 텍스트에서 질문 패턴 감지
+    const questionPatterns = [
+      /어떤.*(분석|부분|기능|내용|항목|요소)/i,
+      /(어떻게|어디에|무엇을|어떤|어느).*\?/i,
+      /(알려주세요|알려주시겠어요|알려주시겠습니까|알려주시겠어요|알려주시겠습니까)\?/i,
+      /(선택|고르|정하|지정).*해주세요/i,
+      /(구체적|명확).*알려주세요/i,
+      /(필요|원하).*정보/i,
+    ];
+    
+    return questionPatterns.some(pattern => pattern.test(response));
+  };
+
+  // 질문 추출 함수
+  const extractQuestions = (response: string, structuredResponse: any): string[] => {
+    const questions: string[] = [];
+    
+    // 구조화된 응답에서 질문 추출
+    if (structuredResponse?.questions && Array.isArray(structuredResponse.questions)) {
+      questions.push(...structuredResponse.questions);
+    }
+    
+    // 텍스트에서 질문 추출
+    const questionMatches = response.match(/[^.!?]*\?/g);
+    if (questionMatches) {
+      questionMatches.forEach(q => {
+        const trimmed = q.trim();
+        if (trimmed.length > 5 && !questions.includes(trimmed)) {
+          questions.push(trimmed);
+        }
+      });
+    }
+    
+    return questions;
+  };
+
+  // 자동 답변 생성 함수
+  const generateAutoResponse = (
+    questions: string[],
+    originalRequest: string,
+    projectContextInfo: string,
+    fileContents: string
+  ): string => {
+    let autoResponse = `**자동 답변 생성 (질문 해결):**\n\n`;
+    autoResponse += `원래 요청: "${originalRequest}"\n\n`;
+    autoResponse += `다음 질문들에 대해 프로젝트 컨텍스트를 바탕으로 가장 적절한 답변을 선택하고 바로 진행하세요:\n\n`;
+    
+    questions.forEach((q, idx) => {
+      autoResponse += `${idx + 1}. ${q}\n`;
+    });
+    
+    autoResponse += `\n**지시사항:**\n`;
+    autoResponse += `- 위 질문들에 대해 프로젝트 구조, 설정 파일, 기존 코드를 분석하여 가장 적절한 답변을 선택하세요.\n`;
+    autoResponse += `- 불필요한 질문 없이 바로 계획을 세우고 실행하세요.\n`;
+    autoResponse += `- 프로젝트 컨텍스트 정보를 활용하여 명확한 결정을 내리세요.\n`;
+    autoResponse += `- 질문에 대한 답변을 선택한 후, 그에 맞는 구체적인 계획을 제시하세요.\n`;
+    
+    if (projectContextInfo) {
+      autoResponse += `\n${projectContextInfo}`;
+    }
+    
+    if (fileContents) {
+      autoResponse += `\n${fileContents}`;
+    }
+    
+    return autoResponse;
+  };
+
+  // 자동 답변 처리 함수 (재귀)
+  const handleAutoResponse = async (
+    autoResponseContent: string,
+    messageHistory: Message[],
+    projectContextInfo: string,
+    fileContents: string,
+    allContextFiles: Array<{ path: string; name: string }>,
+    depth: number
+  ) => {
+    // 최대 재귀 깊이 제한 (무한 루프 방지)
+    if (depth >= 5) {
+      console.warn("⚠️ 최대 재귀 깊이에 도달했습니다. 자동 답변 생성을 중단합니다.");
+      const maxDepthMessage: Message = {
+        role: "assistant",
+        content: "⚠️ 질문 해결 과정이 너무 깊어져 자동 처리를 중단했습니다. 수동으로 답변해주세요.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, maxDepthMessage]);
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      
+      // 스트리밍 응답을 위한 assistant 메시지 미리 생성
+      const assistantMessage: Message = {
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, assistantMessage]);
+
+      // API 호출
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: autoResponseContent + projectContextInfo + fileContents,
+          history: messageHistory.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+          context: codeContext,
+          contextFiles: allContextFiles,
+          projectType: projectStructure?.projectType || "Next.js",
+          model: selectedModel,
+          provider: selectedProvider,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "API 호출 실패");
+      }
+
+      // 스트리밍 응답 처리
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error("스트리밍 응답을 읽을 수 없습니다.");
+      }
+
+      let fullContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.content) {
+                fullContent += data.content;
+                // 메시지 업데이트
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const lastIndex = updated.length - 1;
+                  if (updated[lastIndex]?.role === "assistant") {
+                    updated[lastIndex] = {
+                      ...updated[lastIndex],
+                      content: fullContent,
+                    };
+                  }
+                  return updated;
+                });
+              }
+            } catch (e) {
+              // JSON 파싱 실패 무시
+            }
+          }
+        }
+      }
+
+      const assistantResponse = fullContent;
+      
+      // 구조화된 응답 파싱
+      const { parseStructuredResponse } = await import("@/utils/promptBuilder");
+      const structuredResponse = parseStructuredResponse(assistantResponse);
+
+      // 다시 질문이 있는지 확인
+      const hasMoreQuestions = checkForQuestions(assistantResponse, structuredResponse);
+      
+      if (hasMoreQuestions) {
+        console.log(`❓ 추가 질문이 감지되었습니다. (깊이: ${depth + 1})`);
+        
+        // 질문 추출
+        const questions = extractQuestions(assistantResponse, structuredResponse);
+        
+        // 자동 답변 생성 메시지 추가
+        const nextAutoResponseMessage: Message = {
+          role: "user",
+          content: generateAutoResponse(questions, autoResponseContent, projectContextInfo, fileContents),
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, nextAutoResponseMessage]);
+        
+        // 재귀 호출
+        await handleAutoResponse(
+          nextAutoResponseMessage.content,
+          [...messageHistory, { ...assistantMessage, content: assistantResponse }, nextAutoResponseMessage],
+          projectContextInfo,
+          fileContents,
+          allContextFiles,
+          depth + 1
+        );
+        return;
+      }
+
+      // 질문이 없으면 구조화된 응답 처리
+      if (structuredResponse) {
+        const displayContent = formatStructuredResponse(structuredResponse);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIndex = updated.length - 1;
+          if (updated[lastIndex]?.role === "assistant") {
+            updated[lastIndex] = {
+              ...updated[lastIndex],
+              content: displayContent,
+            };
+          }
+          return updated;
+        });
+
+        // 계획 저장
+        const hasPlanObject = !!structuredResponse.plan;
+        const hasPlanContent = structuredResponse.plan && (
+          (structuredResponse.plan.packages && structuredResponse.plan.packages.length > 0) ||
+          (structuredResponse.plan.filesToModify && structuredResponse.plan.filesToModify.length > 0) ||
+          (structuredResponse.plan.filesToCreate && structuredResponse.plan.filesToCreate.length > 0) ||
+          structuredResponse.plan.executionOrder ||
+          structuredResponse.plan.architecture ||
+          structuredResponse.plan.subTasks ||
+          Object.keys(structuredResponse.plan).length > 0
+        );
+        
+        const isPlanningPhase = structuredResponse.phase === "planning";
+        const isExecutionPhase = structuredResponse.phase === "execution";
+        const hasAnalysis = !!structuredResponse.analysis;
+        const hasTasks = structuredResponse.tasks && structuredResponse.tasks.length > 0;
+        const hasCodeBlocks = structuredResponse.codeBlocks && structuredResponse.codeBlocks.length > 0;
+        
+        // 저장 조건: plan 객체가 있거나, planning/execution phase이거나, analysis가 있거나, tasks가 있거나, codeBlocks가 있으면 저장
+        const shouldSave = (isPlanningPhase || isExecutionPhase || hasPlanObject || hasAnalysis || hasTasks || hasCodeBlocks) && projectPath;
+        
+        console.log("📋 Planning save check (auto response):", {
+          phase: structuredResponse.phase,
+          hasPlanObject,
+          hasAnalysis,
+          hasTasks,
+          hasCodeBlocks,
+          isPlanningPhase,
+          isExecutionPhase,
+          shouldSave,
+          projectPath: !!projectPath
+        });
+        
+        if (shouldSave) {
+          try {
+            const saveResponse = await fetch("/api/planning/save", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                projectPath: projectPath,
+                planningData: structuredResponse,
+                userRequest: autoResponseContent,
+              }),
+            });
+            
+            if (saveResponse.ok) {
+              window.dispatchEvent(new CustomEvent("planningSaved"));
+            }
+          } catch (error) {
+            console.error("❌ Error saving planning:", error);
+          }
+        }
+      }
+
+      // 코드 변경사항 파싱
+      if (assistantResponse) {
+        const { parseCodeBlocks } = await import("@/utils/codeParser");
+        const contextFiles = [
+          ...droppedFiles.map(f => f.path),
+          ...relatedFiles.map(f => f.path),
+        ];
+        const codeBlocks = parseCodeBlocks(assistantResponse, contextFiles);
+        
+        if (codeBlocks.length > 0) {
+          if (window.dispatchEvent) {
+            window.dispatchEvent(
+              new CustomEvent("codeChanges", {
+                detail: {
+                  codeBlocks,
+                  response: assistantResponse,
+                },
+              })
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error in handleAutoResponse:", error);
+      const errorMessage: Message = {
+        role: "assistant",
+        content: `자동 답변 생성 중 오류가 발생했습니다: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSend = async (useSimpleMode: boolean = false) => {
     if (!input.trim() || isLoading) return;
 
@@ -1144,7 +1459,15 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
     };
 
     setMessages((prev) => [...prev, userMessage]);
-    const currentInput = input;
+    const currentInput = input.trim();
+    
+    // 디버깅: 실제 사용자 입력 확인
+    console.log("📝 사용자 입력:", {
+      original: input,
+      trimmed: currentInput,
+      length: currentInput.length
+    });
+    
     setInput("");
     setIsLoading(true);
 
@@ -1399,6 +1722,217 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
         ...relatedFiles.map(f => ({ path: f.path, name: f.name })),
       ];
 
+      // 1단계: LLM에게 사용자 의도 파악 및 요청서 보강 요청 (백그라운드 처리, 사용자에게 보이지 않음)
+      console.log("🔍 사용자 의도 파악 중...", {
+        currentInput: currentInput,
+        inputValue: currentInput,
+        timestamp: new Date().toISOString()
+      });
+      
+      // 명시적으로 현재 입력값으로 초기화 (이전 값이 남아있을 수 있음)
+      let enhancedRequest: string = currentInput;
+      let shouldIncludeHistory: boolean = true;
+      let isNewTask: boolean = false;
+
+      // 의도 파악을 빠르게 처리하기 위해 타임아웃 설정 (3초)
+      const intentAnalysisPromise = Promise.race([
+        (async () => {
+          const intentAnalysisResponse = await fetch("/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              message: `**CRITICAL: 사용자 원본 요청만 따르세요. 이전 대화는 무시하세요.**
+
+다음 사용자 요청을 분석하여 명확한 요청서를 작성해주세요.
+
+**사용자 원본 요청 (절대 변경 금지, 이것만 따르세요):**
+"${String(currentInput).trim()}"
+
+**CRITICAL 분석 규칙:**
+1. **원본 요청의 핵심 키워드를 반드시 유지하세요**
+   - 예: 원본이 "루미큐브"이면 → 보강 요청서에도 반드시 "루미큐브" 포함
+   - 예: 원본이 "테트리스"이면 → 보강 요청서에도 반드시 "테트리스" 포함
+   - 절대로 다른 게임/프로젝트 이름으로 바꾸지 마세요
+
+2. **새로운 작업 판단:**
+   - 원본 요청의 핵심 키워드(게임 이름, 프로젝트 이름 등)가 명확히 다르면 → 새로운 독립적인 작업
+   - 예: 이전에 "테트리스"를 요청했고 지금 "루미큐브"를 요청하면 → 새로운 작업
+   - 예: 이전에 "로그인 페이지"를 요청했고 지금 "회원가입 페이지"를 요청하면 → 새로운 작업
+
+3. **보강 요청서 작성:**
+   - 원본 요청의 핵심 단어/이름은 절대 변경하지 마세요
+   - 오타 수정만 허용
+   - 불명확한 표현만 구체화
+   - 프로젝트 컨텍스트 정보만 추가
+
+**응답 형식 (JSON만):**
+\`\`\`json
+{
+  "isNewTask": true/false,
+  "enhancedRequest": "보강된 명확한 요청서 (원본 핵심 키워드 반드시 포함, 절대 변경 금지)",
+  "shouldIncludeHistory": true/false
+}
+\`\`\`
+
+**중요:**
+- 원본 요청의 핵심 키워드가 다른 게임/프로젝트 이름이면 반드시 isNewTask: true로 설정
+- 보강된 요청서는 원본 요청의 핵심을 절대 변경하지 말고, 명확성만 추가하세요`,
+              history: [], // 의도 파악은 히스토리 없이 진행
+              context: "",
+              contextFiles: [],
+              projectType: projectStructure?.projectType || "Next.js",
+              model: selectedModel,
+              provider: selectedProvider,
+              simpleMode: true, // 빠른 응답을 위해 simpleMode 사용
+            }),
+          });
+
+          if (!intentAnalysisResponse.ok) {
+            return null;
+          }
+
+          // 스트리밍 응답 읽기 (빠르게 처리)
+          const reader = intentAnalysisResponse.body?.getReader();
+          const decoder = new TextDecoder();
+          let analysisContent = "";
+
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              const chunk = decoder.decode(value, { stream: true });
+              const lines = chunk.split('\n');
+
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.content) {
+                      analysisContent += data.content;
+                    }
+                    if (data.done) break; // 완료 신호
+                  } catch {
+                    // JSON 파싱 실패 무시
+                  }
+                }
+              }
+            }
+          }
+          
+          return analysisContent;
+        })(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)) // 3초 타임아웃
+      ]);
+
+      try {
+        const analysisContent = await intentAnalysisPromise;
+        
+        if (analysisContent) {
+          // 분석 결과 파싱
+          const { parseStructuredResponse } = await import("@/utils/promptBuilder");
+          const analysisResult = parseStructuredResponse(analysisContent);
+          
+          if (analysisResult) {
+            // JSON 응답에서 정보 추출 시도
+            try {
+              const jsonMatch = analysisContent.match(/```json\s*([\s\S]*?)```/);
+              if (jsonMatch) {
+                const analysisData = JSON.parse(jsonMatch[1]);
+                if (analysisData.enhancedRequest) {
+                  // 원본 요청의 핵심 키워드 추출 (2글자 이상 단어, 특수문자 제거)
+                  const originalKeywords = currentInput
+                    .split(/\s+/)
+                    .filter(word => word.length >= 2)
+                    .map(word => word.toLowerCase().replace(/[^\w가-힣]/g, ''))
+                    .filter(keyword => keyword.length >= 2); // 최소 2글자
+                  
+                  // 보강된 요청서에 원본 키워드가 포함되어 있는지 검증
+                  const enhancedLower = analysisData.enhancedRequest.toLowerCase().replace(/[^\w가-힣]/g, ' ');
+                  
+                  // 핵심 키워드가 모두 포함되어 있는지 확인 (더 엄격한 검증)
+                  const hasAllKeywords = originalKeywords.length > 0 
+                    ? originalKeywords.every(keyword => enhancedLower.includes(keyword))
+                    : true; // 키워드가 없으면 통과
+                  
+                  // 또는 최소한 하나라도 포함되어 있는지 확인
+                  const hasOriginalKeywords = originalKeywords.length > 0
+                    ? originalKeywords.some(keyword => enhancedLower.includes(keyword))
+                    : true;
+                  
+                  // 키워드 검증: 핵심 키워드가 모두 포함되어 있거나, 최소한 하나라도 포함되어 있어야 함
+                  if (hasAllKeywords || (hasOriginalKeywords && originalKeywords.length <= 3)) {
+                    // 원본 키워드가 모두 포함되어 있거나, 키워드가 3개 이하일 때 하나라도 포함되면 보강된 요청서 사용
+                    enhancedRequest = analysisData.enhancedRequest;
+                    shouldIncludeHistory = analysisData.shouldIncludeHistory !== false;
+                    isNewTask = analysisData.isNewTask === true;
+                    
+                    console.log("✅ 요청서 보강 완료:", {
+                      original: currentInput.substring(0, 50),
+                      enhanced: enhancedRequest.substring(0, 50),
+                      isNewTask,
+                      shouldIncludeHistory,
+                      keywords: originalKeywords,
+                      hasAllKeywords,
+                      hasOriginalKeywords
+                    });
+                  } else {
+                    // 원본 키워드가 충분히 포함되지 않으면 원본 요청 사용
+                    console.warn("⚠️ 보강된 요청서에 원본 키워드 누락, 원본 요청 사용:", {
+                      original: currentInput,
+                      enhanced: analysisData.enhancedRequest,
+                      keywords: originalKeywords,
+                      hasAllKeywords,
+                      hasOriginalKeywords
+                    });
+                    enhancedRequest = currentInput; // 원본 유지
+                    // 원본을 사용할 때는 새로운 작업으로 간주
+                    isNewTask = true;
+                    shouldIncludeHistory = false;
+                  }
+                }
+              }
+            } catch (parseError) {
+              console.warn("⚠️ 분석 결과 파싱 실패, 원본 요청 사용:", parseError);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("⚠️ 의도 분석 실패, 원본 요청 사용:", error);
+      }
+
+      // 히스토리 필터링 (새로운 작업이면 이전 대화 제한)
+      let filteredHistory = messages.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      }));
+
+      if (isNewTask || !shouldIncludeHistory) {
+        // 새로운 작업이면 이전 대화 히스토리를 완전히 제거
+        // 원본 요청의 키워드가 다른 게임/프로젝트 이름이면 완전히 새로운 작업
+        filteredHistory = [];
+        
+        console.log("🆕 새로운 작업 감지 - 히스토리 완전 제거:", {
+          original: messages.length,
+          cleared: "all"
+        });
+      } else {
+        // 기존 작업의 연속이면 최근 20개 유지하되, planning/execution 단계 내용은 제외
+        filteredHistory = filteredHistory.filter(msg => {
+          const content = msg.content.toLowerCase();
+          // planning/execution 단계의 상세 내용 제외
+          const hasPlan = content.includes('"plan"') || content.includes('"codeBlocks"');
+          const hasExecution = content.includes('"phase": "execution"') || content.includes('"phase":"execution"');
+          const hasAnalysis = content.includes('"analysis"') && content.length > 500;
+          
+          return !hasPlan && !hasExecution && !hasAnalysis;
+        });
+        
+        filteredHistory = filteredHistory.slice(-20);
+      }
+
       // 스트리밍 응답을 위한 assistant 메시지 미리 생성
       const assistantMessage: Message = {
         role: "assistant",
@@ -1407,18 +1941,61 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
       };
       setMessages((prev) => [...prev, assistantMessage]);
 
-      // Grok API 호출
+      // 2단계: 보강된 요청서로 최종 API 호출
+      // 원본 요청을 명시적으로 포함하여 LLM이 정확히 이해하도록 함
+      
+      // currentInput을 명시적으로 문자열로 변환하여 클로저 문제 방지
+      const originalRequest = String(currentInput).trim();
+      
+      // 디버깅: 현재 입력값 확인
+      console.log("🔍 최종 요청 전 확인:", {
+        currentInput: currentInput,
+        originalRequest: originalRequest,
+        enhancedRequest: enhancedRequest,
+        isNewTask: isNewTask,
+        shouldIncludeHistory: shouldIncludeHistory,
+        inputLength: currentInput.length,
+        originalLength: originalRequest.length,
+        enhancedLength: enhancedRequest.length,
+        areEqual: currentInput === originalRequest
+      });
+      
+      const finalMessage = isNewTask || !shouldIncludeHistory
+        ? `**⚠️ CRITICAL: 사용자 원본 요청을 정확히 따르세요. 이전 대화 히스토리는 무시하세요.**
+
+**사용자 원본 요청 (절대 변경 금지, 이것만 따르세요):**
+"${originalRequest}"
+
+**보강된 요청서 (참고용, 원본 요청이 우선):**
+${enhancedRequest}
+
+**중요 지시사항:**
+1. 위 "사용자 원본 요청"에 명시된 내용을 정확히 따르세요
+2. 원본 요청의 핵심 키워드(게임 이름, 프로젝트 이름 등)를 절대 변경하지 마세요
+   - 예: 원본이 "루미큐브"이면 → 반드시 "루미큐브"로 작업
+   - 예: 원본이 "테트리스"이면 → 반드시 "테트리스"로 작업
+3. 이전 대화 히스토리에 다른 게임/프로젝트 이름이 있어도 무시하고, 원본 요청만 따르세요
+4. 보강된 요청서는 참고용이며, 원본 요청이 우선입니다
+
+${projectContextInfo}${fileContents}`
+        : `${enhancedRequest}${projectContextInfo}${fileContents}`;
+
+      // 디버깅: 최종 메시지 확인
+      console.log("📤 최종 전송 메시지:", {
+        messagePreview: finalMessage.substring(0, 200),
+        messageLength: finalMessage.length,
+        containsOriginal: finalMessage.includes(currentInput),
+        historyLength: filteredHistory.length
+      });
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          message: currentInput + projectContextInfo + fileContents,
-          history: messages.map((msg) => ({
-            role: msg.role,
-            content: msg.content,
-          })),
+          message: finalMessage,
+          history: filteredHistory,
           context: codeContext, // 현재 편집 중인 코드 컨텍스트
           contextFiles: allContextFiles, // 컨텍스트 파일 목록
           projectType: projectStructure?.projectType || "Next.js", // 프로젝트 타입 (자동 감지)
@@ -1453,22 +2030,27 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-                if (data.content) {
-                  fullContent += data.content;
-                  // 메시지 업데이트
-                  setMessages((prev) => {
-                    const updated = [...prev];
-                    // 마지막 메시지가 assistant 메시지인지 확인
-                    const lastIndex = updated.length - 1;
-                    if (updated[lastIndex]?.role === "assistant") {
-                      updated[lastIndex] = {
-                        ...updated[lastIndex],
-                        content: fullContent,
-                      };
-                    }
-                    return updated;
-                  });
-                }
+              // done 신호 확인 (reasoning 모델용)
+              if (data.done) {
+                console.log("✅ Stream completed");
+                break;
+              }
+              if (data.content) {
+                fullContent += data.content;
+                // 메시지 업데이트
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  // 마지막 메시지가 assistant 메시지인지 확인
+                  const lastIndex = updated.length - 1;
+                  if (updated[lastIndex]?.role === "assistant") {
+                    updated[lastIndex] = {
+                      ...updated[lastIndex],
+                      content: fullContent,
+                    };
+                  }
+                  return updated;
+                });
+              }
             } catch (e) {
               // JSON 파싱 실패 무시
             }
@@ -1477,6 +2059,14 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
       }
 
       const assistantResponse = fullContent;
+      
+      // 응답이 완전한지 확인 (reasoning 모델의 경우 응답이 끊길 수 있음)
+      console.log("📝 Full response received:", {
+        length: assistantResponse.length,
+        hasJsonBlock: assistantResponse.includes("```json"),
+        endsWithJson: assistantResponse.trim().endsWith("```"),
+        preview: assistantResponse.substring(0, 200) + "...",
+      });
       
       // 구조화된 응답 파싱
       const { parseStructuredResponse } = await import("@/utils/promptBuilder");
@@ -1488,42 +2078,111 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
           phase: structuredResponse.phase,
           hasPlan: !!structuredResponse.plan,
           planKeys: structuredResponse.plan ? Object.keys(structuredResponse.plan) : [],
-          isClear: structuredResponse.isClear
+          isClear: structuredResponse.isClear,
+          hasTasks: !!structuredResponse.tasks,
+          tasksCount: structuredResponse.tasks?.length || 0,
+          hasCodeBlocks: !!structuredResponse.codeBlocks,
+          codeBlocksCount: structuredResponse.codeBlocks?.length || 0,
         });
       } else {
-        console.log("⚠️ No structured response found in:", assistantResponse.substring(0, 200));
+        console.warn("⚠️ No structured response found in:", {
+          responseLength: assistantResponse.length,
+          preview: assistantResponse.substring(0, 500),
+          hasJsonBlock: assistantResponse.includes("```json"),
+        });
+      }
+
+      // 질문 감지 및 자동 답변 생성
+      const hasQuestions = checkForQuestions(assistantResponse, structuredResponse);
+      if (hasQuestions) {
+        console.log("❓ 질문이 감지되었습니다. 자동 답변 생성 시작...");
+        
+        // 질문 추출
+        const questions = extractQuestions(assistantResponse, structuredResponse);
+        
+        // 자동 답변 생성 메시지 추가
+        const autoResponseMessage: Message = {
+          role: "user",
+          content: generateAutoResponse(questions, currentInput, projectContextInfo, fileContents),
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, autoResponseMessage]);
+        
+        // 자동 답변 생성 (재귀 호출)
+        await handleAutoResponse(
+          autoResponseMessage.content,
+          [...messages, userMessage, { ...assistantMessage, content: assistantResponse }, autoResponseMessage],
+          projectContextInfo,
+          fileContents,
+          allContextFiles,
+          0 // 재귀 깊이
+        );
+        return; // 자동 답변 생성 후 종료
       }
       
       // 구조화된 응답이 있으면 포맷팅해서 표시
       let displayContent = assistantResponse;
       
       if (structuredResponse) {
-        // 계획 저장 조건 완화: phase가 planning이거나, plan 객체가 있으면 저장
+        // 계획 저장 조건: plan 객체가 있거나, phase가 planning이거나, analysis가 있으면 저장
         const hasPlanObject = !!structuredResponse.plan;
         const hasPlanContent = structuredResponse.plan && (
           (structuredResponse.plan.packages && structuredResponse.plan.packages.length > 0) ||
           (structuredResponse.plan.filesToModify && structuredResponse.plan.filesToModify.length > 0) ||
           (structuredResponse.plan.filesToCreate && structuredResponse.plan.filesToCreate.length > 0) ||
           structuredResponse.plan.executionOrder ||
+          structuredResponse.plan.architecture ||
+          structuredResponse.plan.subTasks ||
           Object.keys(structuredResponse.plan).length > 0
         );
         
         const isPlanningPhase = structuredResponse.phase === "planning";
-        const shouldSave = (isPlanningPhase || hasPlanObject) && projectPath;
+        const isExecutionPhase = structuredResponse.phase === "execution";
+        const hasAnalysis = !!structuredResponse.analysis;
+        const hasTasks = structuredResponse.tasks && structuredResponse.tasks.length > 0;
+        const hasCodeBlocks = structuredResponse.codeBlocks && structuredResponse.codeBlocks.length > 0;
+        
+        // 저장 조건: plan 객체가 있거나, planning/execution phase이거나, analysis가 있거나, tasks가 있거나, codeBlocks가 있으면 저장
+        const shouldSave = (isPlanningPhase || isExecutionPhase || hasPlanObject || hasAnalysis || hasTasks || hasCodeBlocks) && projectPath;
         
         console.log("📋 Planning save check:", {
           phase: structuredResponse.phase,
           hasPlanObject,
           hasPlanContent,
+          hasAnalysis,
+          hasTasks,
+          hasCodeBlocks,
           isPlanningPhase,
+          isExecutionPhase,
           shouldSave,
-          projectPath: !!projectPath,
-          planKeys: structuredResponse.plan ? Object.keys(structuredResponse.plan) : []
+          projectPath: projectPath || "MISSING",
+          planKeys: structuredResponse.plan ? Object.keys(structuredResponse.plan) : [],
+          planFilesToCreate: structuredResponse.plan?.filesToCreate?.length || 0,
+          planFilesToModify: structuredResponse.plan?.filesToModify?.length || 0,
+          planPackages: structuredResponse.plan?.packages?.length || 0,
+          tasksCount: structuredResponse.tasks?.length || 0,
+          codeBlocksCount: structuredResponse.codeBlocks?.length || 0,
         });
         
         if (shouldSave) {
           try {
-            console.log("💾 Attempting to save planning...");
+            console.log("💾 Attempting to save planning...", {
+              projectPath,
+              hasPlan: !!structuredResponse.plan,
+              phase: structuredResponse.phase,
+            });
+            
+            if (!projectPath) {
+              console.error("❌ Cannot save planning: projectPath is missing!");
+              // 사용자에게 알림 표시
+              const errorMessage: Message = {
+                role: "assistant",
+                content: "⚠️ **계획 저장 실패**\n\n프로젝트가 선택되지 않아 계획을 저장할 수 없습니다. 좌측 사이드바에서 프로젝트를 선택한 후 다시 시도해주세요.",
+                timestamp: new Date(),
+              };
+              setMessages((prev) => [...prev, errorMessage]);
+              return;
+            }
             
             const saveResponse = await fetch("/api/planning/save", {
               method: "POST",
@@ -1549,10 +2208,13 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
             // 저장 실패해도 계속 진행
           }
         } else {
-          console.log("⏭️ Planning not saved - conditions not met:", {
+          console.warn("⏭️ Planning not saved - conditions not met:", {
             isPlanningPhase,
             hasPlanObject,
-            projectPath: !!projectPath
+            hasAnalysis,
+            hasTasks,
+            projectPath: projectPath || "MISSING",
+            reason: !projectPath ? "projectPath is missing" : "planning conditions not met"
           });
         }
         
@@ -1866,17 +2528,17 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
         {messages.map((message, index) => (
           <div
             key={index}
-            className={`flex gap-3 ${
+            className={`flex gap-2 ${
               message.role === "user" ? "justify-end" : "justify-start"
             }`}
           >
             {message.role === "assistant" && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
-                <Bot className="w-5 h-5 text-white" />
+              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center mt-1">
+                <Bot className="w-4 h-4 text-white" />
               </div>
             )}
             <div
-              className={`max-w-[85%] rounded-lg px-4 py-2 relative group break-words ${
+              className={`max-w-[90%] rounded-lg px-3 py-2 relative group break-words ${
                 message.role === "user"
                   ? "bg-blue-500 text-white"
                   : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100"
@@ -1912,18 +2574,18 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
               </div>
             </div>
             {message.role === "user" && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-400 flex items-center justify-center">
-                <User className="w-5 h-5 text-white" />
+              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-400 flex items-center justify-center mt-1">
+                <User className="w-4 h-4 text-white" />
               </div>
             )}
           </div>
         ))}
         {isLoading && (
-          <div className="flex gap-3 justify-start">
-            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center">
-              <Bot className="w-5 h-5 text-white" />
+          <div className="flex gap-2 justify-start">
+            <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center mt-1">
+              <Bot className="w-4 h-4 text-white" />
             </div>
-            <div className="bg-gray-100 dark:bg-gray-700 rounded-lg px-4 py-2">
+            <div className="bg-gray-100 dark:bg-gray-700 rounded-lg px-3 py-2">
               <div className="flex gap-1">
                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0.1s" }} />

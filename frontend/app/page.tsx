@@ -127,6 +127,19 @@ export default function Home() {
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFileIndex, setActiveFileIndex] = useState(0);
+  // localStorage에서 저장된 사이드바 너비 복원 (초기값 계산)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window !== "undefined") {
+      const savedWidth = localStorage.getItem("sidebarWidth");
+      if (savedWidth) {
+        const width = parseInt(savedWidth, 10);
+        if (width > 0) {
+          return width;
+        }
+      }
+    }
+    return 256; // 기본 너비 (px) - w-64와 동일
+  });
   // localStorage에서 저장된 채팅창 너비 복원 (초기값 계산)
   const [chatPanelWidth, setChatPanelWidth] = useState(() => {
     if (typeof window !== "undefined") {
@@ -140,8 +153,43 @@ export default function Home() {
     }
     return 400; // 기본 너비 (px)
   });
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isResizingChat, setIsResizingChat] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 사이드바 너비 리사이징 핸들러
+  useEffect(() => {
+    if (!isResizingSidebar) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const newWidth = e.clientX - containerRect.left;
+
+      // 최소/최대 너비 제한
+      const minWidth = 200;
+      const maxWidth = containerRect.width - chatPanelWidth - 300; // 중앙 영역 최소 300px 보장
+
+      if (newWidth >= minWidth && newWidth <= maxWidth) {
+        setSidebarWidth(newWidth);
+        // 실시간으로 localStorage에 저장
+        localStorage.setItem("sidebarWidth", newWidth.toString());
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingSidebar(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingSidebar, chatPanelWidth]);
 
   // 채팅창 너비 리사이징 핸들러
   useEffect(() => {
@@ -155,7 +203,7 @@ export default function Home() {
 
       // 최소/최대 너비 제한
       const minWidth = 300;
-      const maxWidth = containerRect.width - 300; // 중앙 영역 최소 300px 보장
+      const maxWidth = containerRect.width - sidebarWidth - 300; // 중앙 영역 최소 300px 보장
 
       if (newWidth >= minWidth && newWidth <= maxWidth) {
         setChatPanelWidth(newWidth);
@@ -175,7 +223,7 @@ export default function Home() {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isResizingChat]);
+  }, [isResizingChat, sidebarWidth]);
 
   // 코드 변경사항 이벤트 리스너
   useEffect(() => {
@@ -261,25 +309,54 @@ export default function Home() {
     // setOpenFiles([]);
   };
 
-  const handleFileSelect = async (filePath: string) => {
-    if (!currentProject) return;
+  // 경로 정규화 함수
+  const normalizePath = (path: string): string => {
+    let normalized = path;
+    // ./ 제거
+    if (normalized.startsWith("./")) {
+      normalized = normalized.substring(2);
+    }
+    // 앞의 / 제거
+    if (normalized.startsWith("/")) {
+      normalized = normalized.substring(1);
+    }
+    // 백슬래시를 슬래시로 변환
+    normalized = normalized.replace(/\\/g, "/");
+    // 연속된 슬래시 제거
+    normalized = normalized.replace(/\/+/g, "/");
+    return normalized;
+  };
 
-    // 이미 열린 파일인지 확인
-    const existingIndex = openFiles.findIndex((f) => f.path === filePath);
+  const handleFileSelect = async (filePath: string) => {
+    if (!currentProject) {
+      console.warn("파일 선택 실패: 프로젝트가 선택되지 않았습니다");
+      return;
+    }
+
+    // 경로 정규화
+    const normalizedPath = normalizePath(filePath);
+    console.log("파일 선택 요청:", { originalPath: filePath, normalizedPath, projectPath: currentProject.path });
+
+    // 이미 열린 파일인지 확인 (정규화된 경로로 비교)
+    const existingIndex = openFiles.findIndex((f) => normalizePath(f.path) === normalizedPath);
     if (existingIndex !== -1) {
+      console.log("이미 열린 파일:", normalizedPath, "인덱스:", existingIndex);
       setActiveFileIndex(existingIndex);
       return;
     }
 
     try {
-      const response = await fetch(
-        `/api/files/read?path=${encodeURIComponent(filePath)}&projectPath=${encodeURIComponent(currentProject.path)}`
-      );
+      const apiUrl = `/api/files/read?path=${encodeURIComponent(normalizedPath)}&projectPath=${encodeURIComponent(currentProject.path)}`;
+      console.log("파일 읽기 API 호출:", apiUrl);
+      
+      const response = await fetch(apiUrl);
       if (response.ok) {
         const data = await response.json();
-        const fileName = filePath.split("/").pop() || filePath;
+        console.log("파일 읽기 성공:", { path: normalizedPath, hasContent: !!data.content, encoding: data.encoding });
+        
+        const fileName = normalizedPath.split("/").pop() || normalizedPath;
         const fileType = getFileType(
-          filePath,
+          normalizedPath,
           data.isImage,
           data.isVideo,
           data.isAudio,
@@ -288,24 +365,35 @@ export default function Home() {
           data.encoding
         );
         const newFile: OpenFile = {
-          path: filePath,
+          path: normalizedPath,
           name: fileName,
           content: data.content || "",
-          language: getLanguageFromExtension(filePath),
+          language: getLanguageFromExtension(normalizedPath),
           fileType,
           encoding: data.encoding,
           mimeType: ["image", "video", "audio", "font", "document"].includes(fileType)
-            ? getMimeType(filePath)
+            ? getMimeType(normalizedPath)
             : undefined,
         };
         setOpenFiles((prev) => {
           const newFiles = [...prev, newFile];
           setActiveFileIndex(newFiles.length - 1);
+          console.log("파일 추가 완료:", { path: normalizedPath, totalFiles: newFiles.length, activeIndex: newFiles.length - 1 });
           return newFiles;
         });
+      } else {
+        // 에러 응답 처리
+        const errorData = await response.json().catch(() => ({}));
+        console.error("파일 읽기 실패:", { 
+          path: normalizedPath, 
+          status: response.status, 
+          error: errorData.error || "알 수 없는 오류" 
+        });
+        alert(`파일을 열 수 없습니다: ${errorData.error || "알 수 없는 오류"}\n경로: ${normalizedPath}`);
       }
     } catch (error) {
       console.error("Error loading file:", error);
+      alert(`파일을 열 수 없습니다: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
     }
   };
 
@@ -421,18 +509,38 @@ export default function Home() {
       className="flex h-screen w-screen overflow-hidden bg-gray-50 dark:bg-gray-900"
     >
       {/* 좌측: 프로젝트 섹션 */}
-      <ProjectSidebar
-        currentProject={currentProject?.name || null}
-        onProjectChange={handleProjectChange}
-        onFileSelect={handleFileSelect}
-        onFileDrag={handleFileDrag}
-      />
+      <div 
+        style={{ width: `${sidebarWidth}px` }} 
+        className="flex-shrink-0 overflow-hidden"
+      >
+        <ProjectSidebar
+          currentProject={currentProject?.name || null}
+          onProjectChange={handleProjectChange}
+          onFileSelect={handleFileSelect}
+          onFileDrag={handleFileDrag}
+        />
+      </div>
+
+      {/* 사이드바 리사이저 바 */}
+      <div
+        className={`relative w-0.5 bg-gray-200 dark:bg-gray-700 hover:bg-blue-500 dark:hover:bg-blue-600 cursor-col-resize transition-colors flex-shrink-0 ${
+          isResizingSidebar ? "bg-blue-500 dark:bg-blue-600" : ""
+        }`}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          setIsResizingSidebar(true);
+        }}
+      >
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-0.5 h-4 bg-gray-400 dark:bg-gray-500 rounded"></div>
+        </div>
+      </div>
 
       {/* 중앙: 리소스 뷰어 (탭 + 코드 에디터) */}
       <div 
         className="flex flex-col border-x border-gray-200 dark:border-gray-700 overflow-hidden"
         style={{ 
-          width: `calc(100% - ${chatPanelWidth}px - 1px)`,
+          width: `calc(100% - ${sidebarWidth}px - ${chatPanelWidth}px - 1px)`,
           minWidth: 0 // flexbox에서 오버플로우 방지
         }}
       >
@@ -448,7 +556,7 @@ export default function Home() {
 
       {/* 리사이저 바 */}
       <div
-        className={`relative w-1 bg-gray-200 dark:bg-gray-700 hover:bg-blue-500 dark:hover:bg-blue-600 cursor-col-resize transition-colors flex-shrink-0 ${
+        className={`relative w-0.5 bg-gray-200 dark:bg-gray-700 hover:bg-blue-500 dark:hover:bg-blue-600 cursor-col-resize transition-colors flex-shrink-0 ${
           isResizingChat ? "bg-blue-500 dark:bg-blue-600" : ""
         }`}
         onMouseDown={(e) => {
@@ -457,7 +565,7 @@ export default function Home() {
         }}
       >
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-0.5 h-8 bg-gray-400 dark:bg-gray-500 rounded"></div>
+          <div className="w-0.5 h-4 bg-gray-400 dark:bg-gray-500 rounded"></div>
         </div>
       </div>
 

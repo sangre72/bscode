@@ -238,9 +238,11 @@ export default function ResourceViewer({
           );
         } else if (activeFile.language === "javascript") {
           return (
-            <JavaScriptViewer
+            <DefaultViewer
               content={activeFile.content}
+              language={activeFile.language}
               onContentChange={(value) => onFileChange(activeFileIndex, value)}
+              diagnostics={diagnostics}
             />
           );
         } else if (activeFile.language === "python") {
@@ -256,6 +258,7 @@ export default function ResourceViewer({
               content={activeFile.content}
               language={activeFile.language}
               onContentChange={(value) => onFileChange(activeFileIndex, value)}
+              diagnostics={diagnostics}
             />
           );
         }
@@ -278,7 +281,7 @@ export default function ResourceViewer({
               const Icon = getFileIcon(file.fileType);
               return (
                 <div
-                  key={file.path}
+                  key={index}
                   onClick={() => onFileSelect(index)}
                   className={`flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors border-b-2 flex-shrink-0 cursor-pointer ${
                     index === activeFileIndex
@@ -287,7 +290,19 @@ export default function ResourceViewer({
                   }`}
                 >
                   <Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="whitespace-nowrap">{file.name}</span>
+                  <span className="whitespace-nowrap" title={file.path}>
+                    {(() => {
+                      // 같은 이름의 파일이 여러 개 열려있는지 확인
+                      const sameNameCount = openFiles.filter(f => f.name === file.name).length;
+                      if (sameNameCount > 1) {
+                        // 디렉토리 경로 표시
+                        const dirPath = file.path.substring(0, file.path.lastIndexOf("/")) || ".";
+                        const dirName = dirPath.split("/").pop() || dirPath;
+                        return `${file.name} (${dirName})`;
+                      }
+                      return file.name;
+                    })()}
+                  </span>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();

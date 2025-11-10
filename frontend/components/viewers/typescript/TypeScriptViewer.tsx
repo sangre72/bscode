@@ -32,79 +32,57 @@ export default function TypeScriptViewer({
 }: TypeScriptViewerProps) {
   const editorRef = useRef<any>(null);
 
+  // 백엔드에서 받은 진단만 마커로 표시
   useEffect(() => {
-    if (editorRef.current && diagnostics.length > 0) {
+    if (editorRef.current) {
       loader.init().then((monaco) => {
-        const markers: any[] = diagnostics.map((error) => ({
-          startLineNumber: error.line,
-          startColumn: error.character,
-          endLineNumber: error.line,
-          endColumn: error.character + 1,
-          message: error.message,
-          severity:
-            error.severity === "error"
-              ? monaco.MarkerSeverity.Error
-              : error.severity === "warning"
-              ? monaco.MarkerSeverity.Warning
-              : monaco.MarkerSeverity.Info,
-        }));
-        monaco.editor.setModelMarkers(
-          editorRef.current.getModel()!,
-          "typescript",
-          markers
-        );
+        if (diagnostics.length > 0) {
+          const markers: any[] = diagnostics.map((error) => ({
+            startLineNumber: error.line,
+            startColumn: error.character,
+            endLineNumber: error.line,
+            endColumn: error.character + (error.length || 1),
+            message: error.message,
+            severity:
+              error.severity === "error"
+                ? monaco.MarkerSeverity.Error
+                : error.severity === "warning"
+                ? monaco.MarkerSeverity.Warning
+                : monaco.MarkerSeverity.Info,
+          }));
+          monaco.editor.setModelMarkers(
+            editorRef.current.getModel()!,
+            "backend-diagnostics",
+            markers
+          );
+        } else {
+          // 진단이 없으면 마커 제거
+          monaco.editor.setModelMarkers(
+            editorRef.current.getModel()!,
+            "backend-diagnostics",
+            []
+          );
+        }
       });
     }
   }, [diagnostics]);
 
+  // Monaco Editor의 기본 TypeScript 진단 비활성화
   useEffect(() => {
-    if (projectPath && editorRef.current) {
-      loader.init().then((monaco) => {
-        const model = editorRef.current?.getModel();
-        if (model) {
-          monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-            target: monaco.languages.typescript.ScriptTarget.ES2020,
-            allowNonTsExtensions: true,
-            moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
-            module: monaco.languages.typescript.ModuleKind.ESNext,
-            noEmit: true,
-            esModuleInterop: true,
-            jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
-            reactNamespace: "React",
-            allowJs: true,
-            typeRoots: ["node_modules/@types"],
-          });
-
-          monaco.languages.typescript.typescriptDefaults.setExtraLibs([
-            {
-              content: `declare module "@/*" { const value: any; export = value; }`,
-              filePath: "node_modules/@types/custom.d.ts",
-            },
-            {
-              content: `
-                declare module "next" {
-                  export type Metadata = { title?: string; description?: string; [key: string]: any; };
-                  export type { Metadata };
-                }
-                declare module "next/font/google" {
-                  export function Geist(options: { variable: string; subsets: string[] }): { variable: string; className: string; };
-                  export function Geist_Mono(options: { variable: string; subsets: string[] }): { variable: string; className: string; };
-                }
-                declare module "next/dynamic" {
-                  import { ComponentType } from "react";
-                  export default function dynamic<T extends ComponentType<any>>(
-                    loader: () => Promise<{ default: T }>,
-                    options?: { ssr?: boolean }
-                  ): T;
-                }
-              `,
-              filePath: "node_modules/@types/next.d.ts",
-            },
-          ]);
-        }
+    loader.init().then((monaco) => {
+      // TypeScript 언어 서버의 자동 진단 비활성화
+      monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: true,
+        noSuggestionDiagnostics: true,
       });
-    }
-  }, [projectPath]);
+      monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: true,
+        noSuggestionDiagnostics: true,
+      });
+    });
+  }, []);
 
   return (
     <div className="flex flex-col h-full">

@@ -302,6 +302,13 @@ You MUST ALWAYS respond in the following JSON format - NO free-form text:
 - **This helps users see what will be created before execution**
 - **Include at least a preview or skeleton of the code in codeBlocks**
 
+**CRITICAL FOR REASONING MODELS (grok-4-reasoning, etc.):**
+- **MUST provide COMPLETE responses** - Do NOT truncate or cut off mid-response
+- **If response is long, continue until ALL codeBlocks are complete**
+- **DO NOT stop mid-file or mid-code-block** - Complete the entire response
+- **If you reach token limits, prioritize completing codeBlocks over other content**
+- **For large responses, ensure ALL files in filesToCreate have complete codeBlocks**
+
 **Phase 2 (Execution) - Complete Code:**
 - **MUST include codeBlocks array** when files need to be created or modified
 - **MUST include complete file content** in codeBlocks - DO NOT leave files empty

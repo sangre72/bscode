@@ -54,6 +54,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
   const [executingSteps, setExecutingSteps] = useState<Set<number>>(new Set());
   const [executedSteps, setExecutedSteps] = useState<Set<number>>(new Set());
   const [stepResults, setStepResults] = useState<Map<number, { success: boolean; message: string }>>(new Map());
+  const [analysisResults, setAnalysisResults] = useState<Map<number, string>>(new Map());
 
   // 디버깅: codeBlocks 확인 (모든 hook은 early return 전에 호출)
   useEffect(() => {
@@ -120,6 +121,200 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
     );
   };
 
+  // 마크다운 텍스트 포맷팅 (간단한 버전)
+  const formatMarkdownText = (text: string): React.ReactNode => {
+    const parts: Array<{ type: string; content: string; language?: string }> = [];
+    let lastIndex = 0;
+
+    // 코드 블록 처리
+    const codeBlockPattern = /```(\w+)?\n?([\s\S]*?)```/g;
+    let match;
+    while ((match = codeBlockPattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({
+          type: "text",
+          content: text.substring(lastIndex, match.index),
+        });
+      }
+      parts.push({
+        type: "codeBlock",
+        content: match[2],
+        language: match[1] || "",
+      });
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push({
+        type: "text",
+        content: text.substring(lastIndex),
+      });
+    }
+
+    return (
+      <div className="space-y-2">
+        {parts.map((part, idx) => {
+          if (part.type === "codeBlock") {
+            return (
+              <div key={idx} className="my-2 rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
+                {part.language && (
+                  <div className="bg-gray-200 dark:bg-gray-700 px-3 py-1 text-xs text-gray-600 dark:text-gray-400">
+                    {part.language}
+                  </div>
+                )}
+                <pre className="bg-gray-50 dark:bg-gray-800 p-3 overflow-x-auto">
+                  <code className="text-xs font-mono whitespace-pre">{part.content}</code>
+                </pre>
+              </div>
+            );
+          }
+
+          // 텍스트 처리: 마크다운 헤더, 리스트, 강조 등
+          const lines = part.content.split('\n');
+          return (
+            <div key={idx} className="space-y-1">
+              {lines.map((line, lineIdx) => {
+                // 헤더 처리
+                if (line.match(/^###\s+/)) {
+                  return (
+                    <h3 key={lineIdx} className="text-base font-semibold text-gray-900 dark:text-gray-100 mt-3 mb-2">
+                      {line.replace(/^###\s+/, '')}
+                    </h3>
+                  );
+                }
+                if (line.match(/^##\s+/)) {
+                  return (
+                    <h2 key={lineIdx} className="text-lg font-semibold text-gray-900 dark:text-gray-100 mt-4 mb-2">
+                      {line.replace(/^##\s+/, '')}
+                    </h2>
+                  );
+                }
+                if (line.match(/^#\s+/)) {
+                  return (
+                    <h1 key={lineIdx} className="text-xl font-bold text-gray-900 dark:text-gray-100 mt-4 mb-2">
+                      {line.replace(/^#\s+/, '')}
+                    </h1>
+                  );
+                }
+                // 리스트 처리
+                if (line.match(/^[-*]\s+/)) {
+                  return (
+                    <div key={lineIdx} className="ml-4">
+                      <span className="text-gray-700 dark:text-gray-300">• {line.replace(/^[-*]\s+/, '')}</span>
+                    </div>
+                  );
+                }
+                if (line.match(/^\d+\.\s+/)) {
+                  return (
+                    <div key={lineIdx} className="ml-4">
+                      <span className="text-gray-700 dark:text-gray-300">{line}</span>
+                    </div>
+                  );
+                }
+                // 강조 처리
+                let formattedLine = line;
+                formattedLine = formattedLine.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold">$1</strong>');
+                formattedLine = formattedLine.replace(/\*(.*?)\*/g, '<em class="italic">$1</em>');
+                formattedLine = formattedLine.replace(/`(.*?)`/g, '<code class="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>');
+
+                if (line.trim() === '') {
+                  return <br key={lineIdx} />;
+                }
+
+                return (
+                  <p key={lineIdx} className="text-gray-700 dark:text-gray-300" dangerouslySetInnerHTML={{ __html: formattedLine }} />
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // 분석 결과 포맷팅 함수
+  const formatAnalysisResult = (content: string): React.ReactNode => {
+    // JSON 코드 블록 추출 시도
+    const jsonBlockMatch = content.match(/```json\s*([\s\S]*?)```/);
+    if (jsonBlockMatch) {
+      try {
+        const jsonData = JSON.parse(jsonBlockMatch[1]);
+        
+        return (
+          <div className="space-y-4">
+            {/* Analysis 섹션 */}
+            {jsonData.analysis && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                  분석 내용
+                </h4>
+                <div className="text-sm text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 p-3 rounded border border-gray-200 dark:border-gray-700">
+                  {formatMarkdownText(jsonData.analysis)}
+                </div>
+              </div>
+            )}
+
+            {/* Plan 섹션 */}
+            {jsonData.plan && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                  계획
+                </h4>
+                <div className="bg-white dark:bg-gray-800 p-3 rounded border border-gray-200 dark:border-gray-700 space-y-3">
+                  {jsonData.plan.architecture && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
+                        아키텍처:
+                      </div>
+                      <div className="text-sm text-gray-700 dark:text-gray-300">
+                        {jsonData.plan.architecture}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {jsonData.plan.subTasks && jsonData.plan.subTasks.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
+                        세부 작업:
+                      </div>
+                      <ul className="list-disc list-inside space-y-1 text-sm text-gray-700 dark:text-gray-300">
+                        {jsonData.plan.subTasks.map((task: { name?: string; description?: string }, taskIdx: number) => (
+                          <li key={taskIdx}>
+                            <span className="font-medium">{task.name}:</span> {task.description}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Questions가 있으면 표시 */}
+            {jsonData.questions && jsonData.questions.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">
+                  질문
+                </h4>
+                <ul className="list-disc list-inside space-y-1 text-sm text-gray-700 dark:text-gray-300 bg-yellow-50 dark:bg-yellow-900/20 p-3 rounded border border-yellow-200 dark:border-yellow-800">
+                  {jsonData.questions.map((q: string, qIdx: number) => (
+                    <li key={qIdx}>{q}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      } catch (error) {
+        // JSON 파싱 실패 시 원본 텍스트 반환
+        console.error("JSON 파싱 실패:", error);
+      }
+    }
+
+    // JSON 블록이 없으면 일반 텍스트로 처리
+    return formatMarkdownText(content);
+  };
+
   // planning 데이터 파싱 및 디버깅
   let planningData: {
     metadata?: { userRequest?: string };
@@ -176,7 +371,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
 
     try {
       // stepDescription에서 작업 유형과 대상 추출
-      let result: { success: boolean; message: string } = { success: false, message: "" };
+      let result: { success: boolean; message: string } | null = null;
 
       // 1. 패키지 설치 단계인지 확인
       if (stepDescription.toLowerCase().includes("install") || stepDescription.toLowerCase().includes("패키지")) {
@@ -253,7 +448,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
               }
             }
 
-            if (result.success !== false) {
+            if (!result || result.success !== false) {
               console.log("📝 파일 생성 요청:", {
                 filePath: file.path,
                 contentLength: content.length,
@@ -360,7 +555,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
             }
           }
 
-          if (result.success !== false) {
+          if (!result || result.success !== false) {
             console.log("📝 파일 작업 요청:", {
               taskType: task.type,
               filePath: task.target,
@@ -386,6 +581,146 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
         }
       }
 
+      // 결과가 설정되지 않은 경우
+      if (!result) {
+        // 정보 제공 단계인지 확인 (분석, 요약, 제시 등)
+        const isInfoStep = stepDescription.match(/(분석|요약|제시|제공|확인|검토|리뷰|구조|의존성|개선)/i);
+        
+        if (isInfoStep) {
+          // LLM에게 실제 분석 요청
+          try {
+            // 프로젝트 구조 정보 가져오기
+            let projectContextInfo = "";
+            const contextFiles: Array<{ path: string; name: string }> = [];
+            
+            if (projectPath) {
+              try {
+                const structureResponse = await fetch(`/api/projects/structure?path=${encodeURIComponent(projectPath)}`);
+                if (structureResponse.ok) {
+                  const structureData = await structureResponse.json();
+                  
+                  projectContextInfo += "\n\n## 📁 프로젝트 구조\n\n";
+                  projectContextInfo += `**프로젝트 타입:** ${structureData.projectType || "Unknown"}\n\n`;
+                  
+                  if (structureData.treeText) {
+                    projectContextInfo += "**파일 트리 구조:**\n";
+                    projectContextInfo += "```\n";
+                    projectContextInfo += structureData.treeText;
+                    projectContextInfo += "\n```\n\n";
+                  }
+                  
+                  if (structureData.configFiles) {
+                    projectContextInfo += "**주요 설정 파일:**\n\n";
+                    for (const [fileName, content] of Object.entries(structureData.configFiles)) {
+                      projectContextInfo += `### ${fileName}\n`;
+                      projectContextInfo += "```json\n";
+                      const maxLength = 3000;
+                      if (typeof content === 'string' && content.length > maxLength) {
+                        projectContextInfo += content.substring(0, maxLength) + "\n... (내용 생략)";
+                      } else {
+                        projectContextInfo += content;
+                      }
+                      projectContextInfo += "\n```\n\n";
+                      
+                      contextFiles.push({ path: fileName, name: fileName });
+                    }
+                  }
+                  
+                  projectContextInfo += "\n**중요:** 위 프로젝트 구조와 설정 파일을 참고하여 분석을 수행하세요.\n";
+                }
+              } catch (error) {
+                console.error("프로젝트 구조 가져오기 실패:", error);
+              }
+            }
+
+            const analysisPrompt = `다음 요청에 대한 분석을 수행해주세요:\n\n` +
+              `요청: ${metadata.userRequest || "프로젝트 분석"}\n` +
+              `분석 항목: ${stepDescription}\n\n` +
+              `프로젝트 경로: ${projectPath}\n\n` +
+              `위 항목에 대해 구체적이고 상세한 분석 결과를 제공해주세요. ` +
+              `프로젝트 구조, 의존성, 개선 사항 등을 포함하여 자세히 설명해주세요. ` +
+              `제공된 프로젝트 구조와 설정 파일 정보를 활용하여 분석하세요. ` +
+              `불필요한 질문 없이 바로 분석 결과를 제공하세요.` +
+              projectContextInfo;
+
+            const response = await fetch("/api/chat", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                message: analysisPrompt,
+                history: [],
+                context: "",
+                contextFiles: contextFiles,
+                projectType: "General",
+                model: "grok-code-fast-1",
+                provider: "grok",
+                simpleMode: false,
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error("분석 요청 실패");
+            }
+
+            // 스트리밍 응답 처리
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+
+            if (!reader) {
+              throw new Error("스트리밍 응답을 읽을 수 없습니다.");
+            }
+
+            let fullContent = "";
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              const chunk = decoder.decode(value, { stream: true });
+              const lines = chunk.split('\n');
+
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.content) {
+                      fullContent += data.content;
+                    }
+                  } catch {
+                    // JSON 파싱 실패 무시
+                  }
+                }
+              }
+            }
+
+            // 분석 결과 저장
+            if (fullContent.trim().length > 0) {
+              setAnalysisResults(new Map(analysisResults.set(stepIndex, fullContent)));
+              result = {
+                success: true,
+                message: "분석이 완료되었습니다.",
+              };
+            } else {
+              throw new Error("분석 결과가 비어있습니다.");
+            }
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "분석 요청 중 오류가 발생했습니다.";
+            result = {
+              success: false,
+              message: errorMessage,
+            };
+          }
+        } else {
+          // 작업을 찾지 못한 경우
+          result = {
+            success: false,
+            message: `이 단계에 대한 실행 가능한 작업을 찾을 수 없습니다. 단계 설명: "${stepDescription}"`,
+          };
+        }
+      }
+
       setStepResults(new Map(stepResults.set(stepIndex, result)));
       setExecutedSteps(new Set([...executedSteps, stepIndex]));
 
@@ -395,7 +730,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
         });
       } else {
         toast.error(`단계 ${stepIndex + 1} 실행 실패`, {
-          description: result.message,
+          description: result.message || "알 수 없는 오류",
         });
       }
     } catch (error) {
@@ -698,6 +1033,17 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                                     <XCircle className="w-3 h-3" />
                                   )}
                                   <span>{result.message}</span>
+                                </div>
+                              )}
+                              {/* 분석 결과 표시 - 제목 아래로 */}
+                              {analysisResults.has(idx) && (
+                                <div className="mt-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                  <div className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-3">
+                                    분석 결과:
+                                  </div>
+                                  <div className="text-sm text-gray-700 dark:text-gray-300">
+                                    {formatAnalysisResult(analysisResults.get(idx) || "")}
+                                  </div>
                                 </div>
                               )}
                             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GripVertical, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GripVertical, Plus, FolderPlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import FileTree, { FileTreeRef } from "./FileTree";
 import PlanningReview from "./PlanningReview";
@@ -64,6 +64,23 @@ export default function ProjectSidebar({
       }
     }
   }, []);
+
+  // currentProject prop이 변경될 때 currentProjectInfo 업데이트
+  useEffect(() => {
+    if (currentProject) {
+      // recentProjects에서 현재 프로젝트 찾기
+      const foundProject = recentProjects.find(p => p.name === currentProject);
+      if (foundProject) {
+        setCurrentProjectInfo(foundProject);
+      } else if (recentProjects.length === 0) {
+        // recentProjects가 아직 로드되지 않았으면, 프로젝트 목록을 다시 로드
+        loadProjects();
+      }
+    } else {
+      // currentProject가 null이면 currentProjectInfo도 null로 설정
+      setCurrentProjectInfo(null);
+    }
+  }, [currentProject, recentProjects]);
 
   // 탭 변경 시 localStorage에 저장
   useEffect(() => {
@@ -221,6 +238,63 @@ export default function ProjectSidebar({
     }
   };
 
+  const handleOpenProject = async () => {
+    try {
+      // File System Access API 사용 (최신 브라우저)
+      if ('showDirectoryPicker' in window) {
+        const directoryHandle = await (window as any).showDirectoryPicker();
+        const directoryName = directoryHandle.name;
+        
+        // 브라우저 보안상 전체 경로를 얻을 수 없으므로, 
+        // 디렉토리명을 기본값으로 사용하고 사용자에게 전체 경로 입력 요청
+        const projectPath = prompt(
+          `선택한 디렉토리: ${directoryName}\n\n프로젝트의 전체 경로를 입력하세요:`,
+          ""
+        );
+        
+        if (!projectPath) return;
+
+        // 경로에서 마지막 디렉토리명 추출
+        const defaultName = projectPath.split(/[/\\]/).filter(Boolean).pop() || directoryName || "새 프로젝트";
+        const projectName = prompt("프로젝트 이름을 입력하세요:", defaultName);
+        if (!projectName) return;
+
+        try {
+          const response = await fetch("/api/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: projectName,
+              projectPath: projectPath,
+            }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            handleProjectClick(data.project);
+          } else {
+            const errorData = await response.json();
+            alert(errorData.error || "프로젝트 추가에 실패했습니다.");
+          }
+        } catch (error) {
+          console.error("Error adding project:", error);
+          alert("프로젝트 추가에 실패했습니다.");
+        }
+      } else {
+        // File System Access API를 지원하지 않는 경우 기존 방식 사용
+        handleAddProject();
+      }
+    } catch (error: any) {
+      // 사용자가 취소한 경우
+      if (error.name === 'AbortError' || error.name === 'NotAllowedError') {
+        return;
+      }
+      console.error("Error opening project:", error);
+      // File System Access API가 실패하면 기존 방식으로 fallback
+      handleAddProject();
+    }
+  };
+
   // 경로 클릭 이벤트 리스너
   useEffect(() => {
     const handlePathClick = async (event: Event) => {
@@ -266,7 +340,7 @@ export default function ProjectSidebar({
   return (
     <div
       ref={sidebarRef}
-      className="w-64 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700"
+      className="w-full h-full flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700"
     >
       {/* 좌측 상단: 현재 진행중인 프로젝트 */}
       <div
@@ -275,11 +349,20 @@ export default function ProjectSidebar({
         style={{ height: `${topSectionHeight}px`, minHeight: "150px" }}
       >
         <div className="p-4">
-        <div className="flex items-center gap-2 mb-2">
-          <Folder className="w-5 h-5 text-blue-500" />
-          <h2 className="font-semibold text-gray-900 dark:text-gray-100">
-            현재 프로젝트
-          </h2>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2">
+            <Folder className="w-5 h-5 text-blue-500" />
+            <h2 className="font-semibold text-gray-900 dark:text-gray-100">
+              현재 프로젝트
+            </h2>
+          </div>
+          <button
+            onClick={handleOpenProject}
+            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+            title="프로젝트 열기"
+          >
+            <FolderPlus className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+          </button>
         </div>
         {currentProjectInfo ? (
           <>
@@ -337,13 +420,13 @@ export default function ProjectSidebar({
 
       {/* 리사이저 */}
       <div
-        className="relative h-2 bg-gray-200 dark:bg-gray-700 hover:bg-blue-500 dark:hover:bg-blue-600 cursor-row-resize transition-colors group flex items-center justify-center"
+        className="relative h-1 bg-gray-200 dark:bg-gray-700 hover:bg-blue-500 dark:hover:bg-blue-600 cursor-row-resize transition-colors group flex items-center justify-center"
         onMouseDown={(e) => {
           e.preventDefault();
           setIsResizing(true);
         }}
       >
-        <GripVertical className="w-4 h-4 text-gray-400 dark:text-gray-500 group-hover:text-blue-500 dark:group-hover:text-blue-400 opacity-50 group-hover:opacity-100 transition-opacity" />
+        <GripVertical className="w-3 h-3 text-gray-400 dark:text-gray-500 group-hover:text-blue-500 dark:group-hover:text-blue-400 opacity-50 group-hover:opacity-100 transition-opacity" />
       </div>
 
       {/* 좌측 하단: 계획 검토 및 최근 프로젝트 목록 */}

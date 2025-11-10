@@ -24,11 +24,29 @@ export async function GET() {
     const projects: ProjectInfo[] = [];
 
     for (const file of files) {
+      // .current 파일과 프로필 메타데이터 파일은 제외
+      if (file === ".current" || file.includes("_profile_meta") || file.includes("_profile.md")) {
+        continue;
+      }
+
       if (file.endsWith(".json")) {
-        const filePath = path.join(PROJECTS_DIR, file);
-        const content = await fs.readFile(filePath, "utf-8");
-        const projectInfo: ProjectInfo = JSON.parse(content);
-        projects.push(projectInfo);
+        try {
+          const filePath = path.join(PROJECTS_DIR, file);
+          const content = await fs.readFile(filePath, "utf-8");
+          const projectInfo: ProjectInfo = JSON.parse(content);
+          
+          // 필수 필드 검증: name과 path가 모두 존재하고 비어있지 않아야 함
+          if (projectInfo.name && projectInfo.path && 
+              projectInfo.name.trim() !== "" && projectInfo.path.trim() !== "") {
+            projects.push(projectInfo);
+          } else {
+            console.warn(`Invalid project info in file ${file}: missing name or path`);
+          }
+        } catch (error) {
+          // JSON 파싱 실패 시 해당 파일은 건너뛰기
+          console.warn(`Failed to parse project file ${file}:`, error);
+          continue;
+        }
       }
     }
 

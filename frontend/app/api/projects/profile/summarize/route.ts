@@ -1,5 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  API_ENDPOINTS,
+  ERROR_MESSAGES,
+  PROJECT_SUMMARY_SYSTEM_PROMPT,
+  getGrokApiKey,
+  getModelConfig,
+} from "@/utils/modelConfig";
 import { promises as fs } from "fs";
+import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 
 const PROJECTS_DIR = path.join(process.cwd(), "recent-projects");
@@ -17,13 +24,7 @@ export async function POST(request: NextRequest) {
     }
 
     // LLM에게 요약본 생성 요청
-    const apiKey = process.env.GROK_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "GROK_API_KEY가 설정되지 않았습니다." },
-        { status: 500 }
-      );
-    }
+    const apiKey = getGrokApiKey();
 
     const prompt = `다음 프로젝트 프로필을 분석하여 질문에 대한 컨텍스트로 사용할 수 있는 요약본을 작성해주세요.
 
@@ -38,32 +39,36 @@ ${profile}
 
 위 프로필을 요약하여 질문 시 컨텍스트로 사용할 수 있는 요약본을 작성해주세요.`;
 
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    // 모델별 설정 가져오기 (통합 관리)
+    const model = "grok-beta";
+    const modelConfig = getModelConfig(model, "summary");
+
+    const response = await fetch(API_ENDPOINTS.GROK, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "grok-beta",
+        model: model,
         messages: [
           {
             role: "system",
-            content: "You are a project profile summarizer. Create concise summaries of project profiles for use as context in questions.",
+            content: PROJECT_SUMMARY_SYSTEM_PROMPT,
           },
           {
             role: "user",
             content: prompt,
           },
         ],
-        temperature: 0.3,
-        max_tokens: 2000,
+        temperature: modelConfig.temperature,
+        max_tokens: modelConfig.maxTokens,
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`LLM API 호출 실패: ${response.status} - ${errorText}`);
+      throw new Error(ERROR_MESSAGES.LLM_API_CALL_FAILED(response.status, errorText));
     }
 
     const data = await response.json();
