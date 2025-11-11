@@ -1,7 +1,8 @@
 "use client";
 
-import { Download, File, FileCode, FileText, Image as ImageIcon, Music, Type, Video, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Download, File, FileCode, FileText, Image as ImageIcon, Music, Save, Type, Video, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import AudioViewer from "./viewers/audio/AudioViewer";
 import DefaultViewer from "./viewers/default/DefaultViewer";
 import DiffViewer from "./viewers/diff/DiffViewer";
@@ -75,6 +76,7 @@ export default function ResourceViewer({
     character: number;
     severity: "error" | "warning" | "info";
   }>>([]);
+  const [isSaving, setIsSaving] = useState(false);
 
   // TypeScript 파일의 경우 진단 정보 가져오기
   useEffect(() => {
@@ -129,6 +131,71 @@ export default function ResourceViewer({
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  // 개행을 LF로 변환하는 함수
+  const normalizeLineEndings = (content: string): string => {
+    // CRLF (\r\n) 또는 CR (\r)을 LF (\n)로 변환
+    return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  };
+
+  // 파일 저장 함수
+  const handleSave = useCallback(async () => {
+    if (!activeFile || !projectPath || activeFile.fileType === "binary" || activeFile.fileType === "image" || activeFile.fileType === "video" || activeFile.fileType === "audio" || activeFile.fileType === "font" || activeFile.fileType === "document") {
+      toast.error("이 파일 형식은 저장할 수 없습니다.");
+      return;
+    }
+
+    if (isSaving) return;
+
+    setIsSaving(true);
+    try {
+      // 개행을 LF로 변환
+      const normalizedContent = normalizeLineEndings(activeFile.content);
+
+      const response = await fetch("/api/files/write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectPath: projectPath,
+          filePath: activeFile.path,
+          content: normalizedContent, // LF로 정규화된 내용
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success(`파일이 저장되었습니다: ${activeFile.name}`);
+        // 파일 트리 새로고침 이벤트 발생
+        window.dispatchEvent(new CustomEvent('fileSaved', { 
+          detail: { path: activeFile.path } 
+        }));
+      } else {
+        toast.error(`파일 저장 실패: ${data.error || '알 수 없는 오류'}`);
+      }
+    } catch (error) {
+      console.error("Error saving file:", error);
+      toast.error("파일 저장 중 오류가 발생했습니다.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [activeFile, projectPath, isSaving]);
+
+  // Ctrl+S 단축키 처리
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+S 또는 Cmd+S
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (activeFile && projectPath && (activeFile.fileType === "text" || activeFile.fileType === "planning" || activeFile.fileType === "diff")) {
+          handleSave();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeFile, projectPath, handleSave]);
 
   const renderContent = () => {
     if (!activeFile) {
@@ -317,6 +384,21 @@ export default function ResourceViewer({
               );
             })}
           </div>
+          {/* 저장 버튼 */}
+          {activeFile && projectPath && (activeFile.fileType === "text" || activeFile.fileType === "planning" || activeFile.fileType === "diff") && (
+            <div className="flex items-center gap-2 ml-auto px-2 flex-shrink-0">
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed rounded transition-colors"
+                title="저장 (Ctrl+S 또는 Cmd+S)"
+                type="button"
+              >
+                <Save className="w-4 h-4" />
+                {isSaving ? "저장 중..." : "저장"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

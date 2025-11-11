@@ -3,6 +3,7 @@
 import ChatPanel from "@/components/ChatPanel";
 import ProjectSidebar from "@/components/ProjectSidebar";
 import ResourceViewer from "@/components/ResourceViewer";
+import Terminal from "@/components/Terminal";
 import { useEffect, useRef, useState } from "react";
 
 interface ProjectInfo {
@@ -121,6 +122,53 @@ function getMimeType(filePath: string): string {
     hwt: "application/x-hwt",
   };
   return mimeMap[ext || ""] || "application/octet-stream";
+}
+
+// 프로젝트별 열린 파일 상태 관리 유틸리티
+const PROJECT_FILES_STORAGE_KEY = "projectOpenFiles";
+
+function saveProjectFiles(projectPath: string, files: OpenFile[], activeIndex: number) {
+  if (typeof window === "undefined" || !projectPath) return;
+  
+  try {
+    const storage = JSON.parse(localStorage.getItem(PROJECT_FILES_STORAGE_KEY) || "{}");
+    storage[projectPath] = {
+      files: files.map(f => ({
+        path: f.path,
+        name: f.name,
+        // content는 저장하지 않음 (용량 문제, 필요시 다시 로드)
+        language: f.language,
+        fileType: f.fileType,
+        encoding: f.encoding,
+        mimeType: f.mimeType,
+        isDiff: f.isDiff,
+      })),
+      activeIndex,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(PROJECT_FILES_STORAGE_KEY, JSON.stringify(storage));
+  } catch (error) {
+    console.error("Failed to save project files:", error);
+  }
+}
+
+function loadProjectFiles(projectPath: string): { files: OpenFile[]; activeIndex: number } | null {
+  if (typeof window === "undefined" || !projectPath) return null;
+  
+  try {
+    const storage = JSON.parse(localStorage.getItem(PROJECT_FILES_STORAGE_KEY) || "{}");
+    const projectData = storage[projectPath];
+    if (!projectData) return null;
+    
+    // 파일 메타데이터만 반환 (content는 나중에 로드)
+    return {
+      files: projectData.files || [],
+      activeIndex: projectData.activeIndex || 0,
+    };
+  } catch (error) {
+    console.error("Failed to load project files:", error);
+    return null;
+  }
 }
 
 export default function Home() {
@@ -304,9 +352,57 @@ export default function Home() {
   }, [currentProject]);
 
   const handleProjectChange = (project: ProjectInfo) => {
+    // 이전 프로젝트의 열린 파일 상태 저장
+    if (currentProject && openFiles.length > 0) {
+      saveProjectFiles(currentProject.path, openFiles, activeFileIndex);
+    }
+    
+    // 새 프로젝트로 변경
     setCurrentProject(project);
-    // 프로젝트 변경 시 열린 파일 초기화 (선택사항)
-    // setOpenFiles([]);
+    
+    // 새 프로젝트의 열린 파일 상태 복원
+    const savedState = loadProjectFiles(project.path);
+    if (savedState && savedState.files.length > 0) {
+      // 파일 메타데이터만 복원하고, 실제 내용은 필요시 로드
+      const restoredFiles: OpenFile[] = savedState.files.map(f => ({
+        ...f,
+        content: "", // 나중에 필요시 로드
+        originalContent: f.isDiff ? "" : undefined,
+      }));
+      
+      // 상태 업데이트
+      setActiveFileIndex(Math.min(savedState.activeIndex, restoredFiles.length - 1));
+      setOpenFiles(restoredFiles);
+      
+      // 첫 번째 파일부터 순차적으로 내용 로드
+      restoredFiles.forEach((file, index) => {
+        if (file.path && !file.path.includes("프로젝트 프로필")) {
+          // 비동기로 파일 내용 로드
+          fetch(`/api/files/read?path=${encodeURIComponent(file.path)}&projectPath=${encodeURIComponent(project.path)}`)
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+              if (data) {
+                setOpenFiles(prev => {
+                  const newFiles = [...prev];
+                  if (newFiles[index] && newFiles[index].path === file.path) {
+                    newFiles[index] = {
+                      ...newFiles[index],
+                      content: data.content || "",
+                      encoding: data.encoding,
+                    };
+                  }
+                  return newFiles;
+                });
+              }
+            })
+            .catch(err => console.error(`Failed to load file ${file.path}:`, err));
+        }
+      });
+    } else {
+      // 저장된 상태가 없으면 빈 상태로 시작
+      setOpenFiles([]);
+      setActiveFileIndex(0);
+    }
   };
 
   // 경로 정규화 함수
@@ -377,8 +473,15 @@ export default function Home() {
         };
         setOpenFiles((prev) => {
           const newFiles = [...prev, newFile];
-          setActiveFileIndex(newFiles.length - 1);
-          console.log("파일 추가 완료:", { path: normalizedPath, totalFiles: newFiles.length, activeIndex: newFiles.length - 1 });
+          const newActiveIndex = newFiles.length - 1;
+          setActiveFileIndex(newActiveIndex);
+          console.log("파일 추가 완료:", { path: normalizedPath, totalFiles: newFiles.length, activeIndex: newActiveIndex });
+          
+          // 프로젝트별 상태 저장
+          if (currentProject) {
+            saveProjectFiles(currentProject.path, newFiles, newActiveIndex);
+          }
+          
           return newFiles;
         });
       } else {
@@ -419,6 +522,12 @@ export default function Home() {
       setOpenFiles((prev) => {
         const newFiles = [...prev];
         newFiles[existingIndex] = profileFile;
+        
+        // 프로젝트별 상태 저장
+        if (currentProject) {
+          saveProjectFiles(currentProject.path, newFiles, existingIndex);
+        }
+        
         return newFiles;
       });
       setActiveFileIndex(existingIndex);
@@ -426,7 +535,14 @@ export default function Home() {
       // 새로 열기
       setOpenFiles((prev) => {
         const newFiles = [...prev, profileFile];
-        setActiveFileIndex(newFiles.length - 1);
+        const newActiveIndex = newFiles.length - 1;
+        setActiveFileIndex(newActiveIndex);
+        
+        // 프로젝트별 상태 저장
+        if (currentProject) {
+          saveProjectFiles(currentProject.path, newFiles, newActiveIndex);
+        }
+        
         return newFiles;
       });
     }
@@ -436,19 +552,33 @@ export default function Home() {
     setOpenFiles((prev) => {
       const newFiles = prev.filter((_, i) => i !== index);
       // 활성 파일 인덱스 조정
+      let newActiveIndex = activeFileIndex;
       if (index <= activeFileIndex) {
         // 닫는 파일이 현재 활성 파일이거나 그 앞에 있으면
-        const newActiveIndex = Math.max(0, activeFileIndex - 1);
+        newActiveIndex = Math.max(0, activeFileIndex - 1);
         setActiveFileIndex(newActiveIndex);
       }
+      
+      // 프로젝트별 상태 저장
+      if (currentProject) {
+        saveProjectFiles(currentProject.path, newFiles, newActiveIndex);
+      }
+      
       return newFiles;
     });
   };
 
   const handleFileChange = (index: number, content: string) => {
-    setOpenFiles((prev) =>
-      prev.map((file, i) => (i === index ? { ...file, content } : file))
-    );
+    setOpenFiles((prev) => {
+      const newFiles = prev.map((file, i) => (i === index ? { ...file, content } : file));
+      
+      // 프로젝트별 상태 저장
+      if (currentProject) {
+        saveProjectFiles(currentProject.path, newFiles, activeFileIndex);
+      }
+      
+      return newFiles;
+    });
   };
 
   const handleFileDrag = (filePath: string, fileName: string) => {
@@ -536,7 +666,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* 중앙: 리소스 뷰어 (탭 + 코드 에디터) */}
+      {/* 중앙: 리소스 뷰어 (탭 + 코드 에디터) + 터미널 */}
       <div 
         className="flex flex-col border-x border-gray-200 dark:border-gray-700 overflow-hidden"
         style={{ 
@@ -544,13 +674,59 @@ export default function Home() {
           minWidth: 0 // flexbox에서 오버플로우 방지
         }}
       >
-        <ResourceViewer
-          openFiles={openFiles}
-          activeFileIndex={activeFileIndex}
-          onFileChange={handleFileChange}
-          onFileClose={handleFileClose}
-          onFileSelect={setActiveFileIndex}
+        <div className="flex-1 overflow-hidden">
+          <ResourceViewer
+            openFiles={openFiles}
+            activeFileIndex={activeFileIndex}
+            onFileChange={handleFileChange}
+            onFileClose={handleFileClose}
+            onFileSelect={setActiveFileIndex}
+            projectPath={currentProject?.path}
+          />
+        </div>
+        <Terminal
           projectPath={currentProject?.path}
+          onCommand={async (command: string) => {
+            console.log("🚀 Terminal onCommand 호출:", { command, projectPath: currentProject?.path });
+            
+            if (!currentProject?.path) {
+              console.error("❌ 프로젝트 경로가 없습니다");
+              return { stdout: "", stderr: "프로젝트 경로가 없습니다.", success: false };
+            }
+
+            try {
+              console.log("📡 API 요청 전송:", { command, projectPath: currentProject.path });
+              const response = await fetch("/api/commands/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  command: command,
+                  projectPath: currentProject.path,
+                }),
+              });
+
+              console.log("📥 API 응답 상태:", response.status, response.ok);
+              const data = await response.json();
+              console.log("📥 API 응답 데이터:", data);
+
+              if (!response.ok) {
+                console.error("❌ API 오류:", data);
+              }
+
+              return {
+                stdout: data.stdout || "",
+                stderr: data.stderr || data.error || "",
+                success: response.ok && data.success,
+              };
+            } catch (error) {
+              console.error("❌ fetch 오류:", error);
+              return {
+                stdout: "",
+                stderr: error instanceof Error ? error.message : String(error),
+                success: false,
+              };
+            }
+          }}
         />
       </div>
 

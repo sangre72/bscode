@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GripVertical, Plus, FolderPlus } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GripVertical, Plus, FolderPlus, Server, ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import FileTree, { FileTreeRef } from "./FileTree";
 import PlanningReview from "./PlanningReview";
@@ -37,6 +37,7 @@ export default function ProjectSidebar({
   const [showFileTree, setShowFileTree] = useState(false);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [isLoadingTree, setIsLoadingTree] = useState(false);
+  const [serverInfo, setServerInfo] = useState<{ command: string; port: number; url: string } | null>(null);
   const [topSectionHeight, setTopSectionHeight] = useState(300); // 기본 높이 (px)
   const [isResizing, setIsResizing] = useState(false);
   // localStorage에서 저장된 탭 상태 불러오기
@@ -72,6 +73,8 @@ export default function ProjectSidebar({
       const foundProject = recentProjects.find(p => p.name === currentProject);
       if (foundProject) {
         setCurrentProjectInfo(foundProject);
+        // 서버 정보 로드
+        loadServerInfo(foundProject.path);
       } else if (recentProjects.length === 0) {
         // recentProjects가 아직 로드되지 않았으면, 프로젝트 목록을 다시 로드
         loadProjects();
@@ -79,6 +82,7 @@ export default function ProjectSidebar({
     } else {
       // currentProject가 null이면 currentProjectInfo도 null로 설정
       setCurrentProjectInfo(null);
+      setServerInfo(null);
     }
   }, [currentProject, recentProjects]);
 
@@ -145,6 +149,8 @@ export default function ProjectSidebar({
         if (data.project) {
           setCurrentProjectInfo(data.project);
           onProjectChange(data.project);
+          // 서버 정보 로드
+          loadServerInfo(data.project.path);
         }
       }
     } catch (error) {
@@ -167,9 +173,25 @@ export default function ProjectSidebar({
     }
   };
 
+  const loadServerInfo = async (projectPath: string) => {
+    try {
+      const response = await fetch(`/api/projects/structure?path=${encodeURIComponent(projectPath)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setServerInfo(data.serverInfo || null);
+      }
+    } catch (error) {
+      console.error("Error loading server info:", error);
+      setServerInfo(null);
+    }
+  };
+
   const handleProjectClick = async (project: ProjectInfo) => {
     setCurrentProjectInfo(project);
     onProjectChange(project);
+
+    // 서버 정보 로드
+    loadServerInfo(project.path);
 
     // 파일 트리 로드
     if (showFileTree) {
@@ -366,6 +388,35 @@ export default function ProjectSidebar({
         </div>
         {currentProjectInfo ? (
           <>
+            {/* 개발 서버 정보 - 제목 바로 밑에 표시 */}
+            {serverInfo && (
+              <div className="mb-3 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <Server className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
+                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">개발 서버</span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+                    <span className="font-mono text-[10px] bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-700">
+                      {serverInfo.command}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <a
+                      href={serverInfo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+                      title="서버 열기"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span className="font-mono">{serverInfo.url}</span>
+                    </a>
+                    <span className="text-gray-500 dark:text-gray-500">(포트 {serverInfo.port})</span>
+                  </div>
+                </div>
+              </div>
+            )}
             <button
               onClick={handleToggleFileTree}
               className="w-full flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"

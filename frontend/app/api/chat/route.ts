@@ -1,4 +1,10 @@
 import {
+  createErrorResponse,
+  createStreamResponseHeaders,
+  encodeStreamMessage,
+  parseApiErrorResponse,
+} from "@/utils/apiHelpers";
+import {
   API_ENDPOINTS,
   DEFAULT_CONFIG,
   DEFAULT_MODELS,
@@ -25,11 +31,7 @@ export async function POST(request: NextRequest) {
       return await handleGrokRequest(message, history, context, selectedModel, contextFiles, projectType, simpleMode);
     }
   } catch (error) {
-    console.error("Chat API Error:", error);
-    return NextResponse.json(
-      { error: "서버 오류가 발생했습니다." },
-      { status: 500 }
-    );
+    return createErrorResponse(error, "서버 오류가 발생했습니다.", 500);
   }
 }
 
@@ -110,16 +112,10 @@ async function handleGrokRequest(
   });
 
   if (!response.ok) {
-    let errorMessage = `Grok API 오류: ${response.statusText}`;
-    try {
-      const errorData = await response.json();
-      console.error("Grok API Error:", errorData);
-      errorMessage = errorData.error?.message || errorData.error || errorMessage;
-    } catch {
-      const errorText = await response.text();
-      console.error("Grok API Error (text):", errorText);
-      errorMessage = errorText || errorMessage;
-    }
+    const errorMessage = await parseApiErrorResponse(
+      response,
+      `Grok API 오류: ${response.statusText}`
+    );
     return NextResponse.json(
       { error: errorMessage },
       { status: response.status }
@@ -154,7 +150,7 @@ async function handleGrokRequest(
                       const json = JSON.parse(data);
                       const content = json.choices?.[0]?.delta?.content || json.choices?.[0]?.message?.content || '';
                       if (content) {
-                        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ content })}\n\n`));
+                        controller.enqueue(encodeStreamMessage({ content }));
                       }
                     } catch (e) {
                       // 마지막 버퍼 파싱 실패는 무시
@@ -190,11 +186,11 @@ async function handleGrokRequest(
                 const finishReason = json.choices?.[0]?.finish_reason;
                 if (finishReason === "stop" || finishReason === "length") {
                   // 응답 완료 신호 전송
-                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ content: "", done: true, finishReason })}\n\n`));
+                  controller.enqueue(encodeStreamMessage({ content: "", done: true, finishReason }));
                 }
                 const content = json.choices?.[0]?.delta?.content || json.choices?.[0]?.message?.content || '';
                 if (content) {
-                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ content })}\n\n`));
+                  controller.enqueue(encodeStreamMessage({ content }));
                 }
               } catch (e) {
                 // JSON 파싱 실패는 조용히 무시 (불완전한 청크일 수 있음)
@@ -216,11 +212,7 @@ async function handleGrokRequest(
   });
 
   return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
+    headers: createStreamResponseHeaders(),
   });
 }
 
@@ -294,16 +286,10 @@ async function handleOllamaRequest(
     });
 
     if (!response.ok) {
-      let errorMessage = `Ollama API 오류: ${response.statusText}`;
-      try {
-        const errorData = await response.json();
-        console.error("Ollama API Error:", errorData);
-        errorMessage = errorData.error || errorMessage;
-      } catch {
-        const errorText = await response.text();
-        console.error("Ollama API Error (text):", errorText);
-        errorMessage = errorText || errorMessage;
-      }
+      const errorMessage = await parseApiErrorResponse(
+        response,
+        `Ollama API 오류: ${response.statusText}`
+      );
       return NextResponse.json(
         { error: errorMessage },
         { status: response.status }
@@ -336,7 +322,7 @@ async function handleOllamaRequest(
                 const json = JSON.parse(line);
                 const content = json.message?.content || '';
                 if (content) {
-                  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ content })}\n\n`));
+                  controller.enqueue(encodeStreamMessage({ content }));
                 }
               } catch (e) {
                 // JSON 파싱 실패 무시
@@ -353,11 +339,7 @@ async function handleOllamaRequest(
     });
 
     return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
+      headers: createStreamResponseHeaders(),
     });
   } catch (error) {
     console.error("Ollama connection error:", error);

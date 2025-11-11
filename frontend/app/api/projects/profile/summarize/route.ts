@@ -1,4 +1,8 @@
 import {
+  parseApiErrorResponse,
+  validateAndRespond,
+} from "@/utils/apiHelpers";
+import {
   API_ENDPOINTS,
   ERROR_MESSAGES,
   PROJECT_SUMMARY_SYSTEM_PROMPT,
@@ -14,14 +18,12 @@ const PROJECTS_DIR = path.join(process.cwd(), "recent-projects");
 // 프로젝트 프로필 요약본 생성
 export async function POST(request: NextRequest) {
   try {
-    const { projectPath, profile } = await request.json();
-
-    if (!projectPath || !profile) {
-      return NextResponse.json(
-        { error: "프로젝트 경로와 프로필이 필요합니다." },
-        { status: 400 }
-      );
-    }
+    const body = await request.json();
+    
+    const validation = validateAndRespond(body, ["projectPath", "profile"]);
+    if (validation) return validation;
+    
+    const { projectPath, profile } = body;
 
     // LLM에게 요약본 생성 요청
     const apiKey = getGrokApiKey();
@@ -67,8 +69,11 @@ ${profile}
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(ERROR_MESSAGES.LLM_API_CALL_FAILED(response.status, errorText));
+      const errorMessage = await parseApiErrorResponse(
+        response,
+        ERROR_MESSAGES.LLM_API_CALL_FAILED(response.status, "")
+      );
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();

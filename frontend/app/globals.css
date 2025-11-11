@@ -55,3 +55,36 @@ body {
 .dark ::-webkit-scrollbar-thumb:hover {
   background: rgb(107 114 128);
 }
+
+/* XTerm 터미널 줄간격 및 폰트 조정 */
+.xterm {
+  line-height: 0.9 !important;
+  font-size: 11px !important;
+  font-weight: 300 !important;
+  font-family: 'SF Mono', Monaco, 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace !important;
+}
+
+.xterm .xterm-screen {
+  line-height: 0.9 !important;
+}
+
+.xterm .xterm-rows {
+  line-height: 0.9 !important;
+  font-family: 'SF Mono', Monaco, 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace !important;
+}
+
+.xterm .xterm-rows > div {
+  line-height: 0.9 !important;
+  height: 10px !important; /* 폰트 크기보다 약간 작은 높이 */
+  overflow: visible !important;
+  font-family: 'SF Mono', Monaco, 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace !important;
+  white-space: pre !important; /* 공백 문자 보존 */
+}
+
+.xterm .xterm-rows > div > span {
+  line-height: 0.9 !important;
+  display: inline !important;
+  vertical-align: baseline !important;
+  font-family: 'SF Mono', Monaco, 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace !important;
+  white-space: pre !important; /* 공백 문자 보존 */
+}
