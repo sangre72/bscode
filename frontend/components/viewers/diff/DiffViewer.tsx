@@ -48,21 +48,21 @@ export default function DiffViewer({
     <div className="h-full flex flex-col bg-white dark:bg-gray-900">
       {/* 헤더 */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded mr-2"
+            title="닫기"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
         <div className="flex items-center gap-2">
           <FileCode className="w-4 h-4 text-gray-500" />
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
             {filePath}
           </span>
         </div>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
-            title="닫기"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
       </div>
 
       {/* Diff 에디터 */}

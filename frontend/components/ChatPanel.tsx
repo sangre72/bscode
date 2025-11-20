@@ -123,6 +123,26 @@ function PathClickableContent({ content }: { content: string }) {
     }
   };
 
+  // 파일 열기 성공 플래그 (pathExpandResult 실패 알림 억제용)
+  const suppressNextFailureRef = useRef(false);
+
+  // fileOpenedSuccessfully 이벤트 리스너: 파일이 성공적으로 열렸을 때 실패 알림 억제
+  useEffect(() => {
+    const handleFileOpenedSuccessfully = (event: Event) => {
+      console.log("파일 열기 성공 이벤트 수신, 다음 pathExpandResult 실패 알림 억제");
+      suppressNextFailureRef.current = true;
+      // 1초 후 플래그 자동 리셋 (혹시 이벤트가 안 오는 경우 대비)
+      setTimeout(() => {
+        suppressNextFailureRef.current = false;
+      }, 1000);
+    };
+
+    window.addEventListener("fileOpenedSuccessfully", handleFileOpenedSuccessfully);
+    return () => {
+      window.removeEventListener("fileOpenedSuccessfully", handleFileOpenedSuccessfully);
+    };
+  }, []);
+
   // 경로 확장 결과 리스너
   useEffect(() => {
     const handlePathExpandResult = (event: Event) => {
@@ -132,6 +152,13 @@ function PathClickableContent({ content }: { content: string }) {
         targetPath: string;
       }>;
       const { found, expandedPath, targetPath } = customEvent.detail;
+
+      // 파일이 성공적으로 열렸으면 실패 알림 억제
+      if (!found && suppressNextFailureRef.current) {
+        console.log("파일 열기 성공했으므로 pathExpandResult 실패 알림 억제:", targetPath);
+        suppressNextFailureRef.current = false;
+        return;
+      }
 
       if (found) {
         toast.success(`경로를 찾았습니다: ${targetPath}`, {
@@ -304,15 +331,11 @@ function PathClickableContent({ content }: { content: string }) {
             );
           }
           // 텍스트는 줄바꿈과 마크다운 기본 스타일 적용
-          const lines = part.content.split('\n');
+          // whitespace-pre-wrap이 이미 최상위 div에 적용되어 있으므로
+          // 줄바꿈과 공백이 자동으로 유지됩니다
           return (
-            <span key={index}>
-              {lines.map((line, lineIdx) => (
-                <span key={lineIdx}>
-                  {line}
-                  {lineIdx < lines.length - 1 && <br />}
-                </span>
-              ))}
+            <span key={index} className="whitespace-pre-wrap">
+              {part.content}
             </span>
           );
         })}
@@ -644,13 +667,14 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
             let displayContent = assistantResponse;
             const { parseStructuredResponse } = await import("@/utils/promptBuilder");
             const structuredResponse = parseStructuredResponse(assistantResponse);
+            let isPlanningPhase = false;
 
             if (structuredResponse) {
               console.log("📋 구조화된 응답 파싱 완료:", structuredResponse);
-              
+
               // Phase 1 (Planning) 응답 저장
-              const isPlanningPhase = structuredResponse.phase === "planning" || 
-                (!structuredResponse.tasks && structuredResponse.plan);
+              isPlanningPhase = structuredResponse.phase === "planning" ||
+                (!structuredResponse.tasks && !!structuredResponse.plan);
               const hasPlanObject = structuredResponse.plan && 
                 (structuredResponse.plan.filesToCreate || structuredResponse.plan.filesToModify || structuredResponse.plan.packages);
 
@@ -665,10 +689,20 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
                       userRequest: rePrompt,
                     }),
                   });
-                  
+
                   if (saveResponse.ok) {
                     console.log("💾 Planning 저장 완료");
+                    const saveData = await saveResponse.json();
                     window.dispatchEvent(new CustomEvent("planningSaved"));
+                    // Planning viewer 열기
+                    window.dispatchEvent(
+                      new CustomEvent("planningSelected", {
+                        detail: {
+                          planningData: structuredResponse,
+                          filename: saveData.filename,
+                        },
+                      })
+                    );
                   }
                 } catch (error) {
                   console.error("❌ Error saving planning:", error);
@@ -694,15 +728,15 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
             };
             setMessages((prev) => [...prev, assistantMessage]);
 
-            // 코드 변경사항 파싱 및 전달
-            if (assistantResponse) {
+            // 코드 변경사항 파싱 및 전달 (Planning phase가 아닐 때만)
+            if (assistantResponse && !isPlanningPhase) {
               const { parseCodeBlocks } = await import("@/utils/codeParser");
               const contextFiles = [
                 ...droppedFiles.map(f => f.path),
                 ...relatedFiles.map(f => f.path),
               ];
               const codeBlocks = parseCodeBlocks(assistantResponse, contextFiles);
-              
+
               if (codeBlocks.length > 0) {
                 window.dispatchEvent(
                   new CustomEvent("codeChanges", {
@@ -1404,35 +1438,45 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
                 userRequest: autoResponseContent,
               }),
             });
-            
+
             if (saveResponse.ok) {
+              const saveData = await saveResponse.json();
               window.dispatchEvent(new CustomEvent("planningSaved"));
+              // Planning viewer 열기
+              window.dispatchEvent(
+                new CustomEvent("planningSelected", {
+                  detail: {
+                    planningData: structuredResponse,
+                    filename: saveData.filename,
+                  },
+                })
+              );
             }
           } catch (error) {
             console.error("❌ Error saving planning:", error);
           }
         }
-      }
 
-      // 코드 변경사항 파싱
-      if (assistantResponse) {
-        const { parseCodeBlocks } = await import("@/utils/codeParser");
-        const contextFiles = [
-          ...droppedFiles.map(f => f.path),
-          ...relatedFiles.map(f => f.path),
-        ];
-        const codeBlocks = parseCodeBlocks(assistantResponse, contextFiles);
-        
-        if (codeBlocks.length > 0) {
-          if (window.dispatchEvent) {
-            window.dispatchEvent(
-              new CustomEvent("codeChanges", {
-                detail: {
-                  codeBlocks,
-                  response: assistantResponse,
-                },
-              })
-            );
+        // 코드 변경사항 파싱 (Planning phase가 아닐 때만)
+        if (assistantResponse && !isPlanningPhase) {
+          const { parseCodeBlocks } = await import("@/utils/codeParser");
+          const contextFiles = [
+            ...droppedFiles.map(f => f.path),
+            ...relatedFiles.map(f => f.path),
+          ];
+          const codeBlocks = parseCodeBlocks(assistantResponse, contextFiles);
+
+          if (codeBlocks.length > 0) {
+            if (window.dispatchEvent) {
+              window.dispatchEvent(
+                new CustomEvent("codeChanges", {
+                  detail: {
+                    codeBlocks,
+                    response: assistantResponse,
+                  },
+                })
+              );
+            }
           }
         }
       }
@@ -1452,6 +1496,84 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
   const handleSend = async (useSimpleMode: boolean = false) => {
     if (!input.trim() || isLoading) return;
 
+    const currentInput = input.trim();
+
+    // 에러 메시지 감지 및 자동 파일 로드
+    if (!useSimpleMode && projectPath) {
+      const { isErrorMessage, parseErrorMessage, normalizePath } = await import("@/utils/errorParser");
+
+      if (isErrorMessage(currentInput)) {
+        console.log("🔍 에러 메시지 감지됨");
+        const errorInfo = parseErrorMessage(currentInput);
+
+        // 자동으로 로드할 파일 목록
+        const filesToLoad: string[] = [];
+
+        // 에러에서 추출된 파일들
+        for (const file of errorInfo.files) {
+          const fullPath = normalizePath(file, projectPath);
+          filesToLoad.push(fullPath);
+        }
+
+        // package.json 자동 추가 (아직 없으면)
+        const packageJsonPath = `${projectPath}/package.json`;
+        const hasPackageJson = droppedFiles.some(f => f.path === packageJsonPath);
+        if (!hasPackageJson) {
+          filesToLoad.push(packageJsonPath);
+        }
+
+        // tsconfig.json 자동 추가 (있으면)
+        const tsconfigPath = `${projectPath}/tsconfig.json`;
+        const hasTsconfig = droppedFiles.some(f => f.path === tsconfigPath);
+        if (!hasTsconfig && errorInfo.type.includes("Type")) {
+          filesToLoad.push(tsconfigPath);
+        }
+
+        // 파일 로드
+        const loadedFiles: Array<{ path: string; name: string; projectPath: string; content: string }> = [];
+        for (const filePath of filesToLoad) {
+          try {
+            const response = await fetch("/api/files/read", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ filePath }),
+            });
+
+            if (response.ok) {
+              const data = await response.json();
+              // 이미 드롭된 파일이 아니면 추가
+              const alreadyDropped = droppedFiles.some(f => f.path === filePath);
+              if (!alreadyDropped) {
+                loadedFiles.push({
+                  path: filePath,
+                  name: filePath.split('/').pop() || filePath,
+                  projectPath: projectPath,
+                  content: data.content,
+                });
+              }
+            }
+          } catch (error) {
+            console.error(`파일 로드 실패: ${filePath}`, error);
+          }
+        }
+
+        // 로드된 파일들을 드롭된 파일 목록에 추가
+        if (loadedFiles.length > 0) {
+          setDroppedFiles(prev => [...prev, ...loadedFiles]);
+          console.log(`✅ ${loadedFiles.length}개 파일 자동 로드:`, loadedFiles.map(f => f.name));
+
+          // 사용자에게 알림
+          const fileNames = loadedFiles.map(f => f.name).join(', ');
+          const infoMessage: Message = {
+            role: "assistant",
+            content: `🔍 에러 분석을 위해 ${loadedFiles.length}개 파일을 자동으로 로드했습니다: ${fileNames}`,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, infoMessage]);
+        }
+      }
+    }
+
     const userMessage: Message = {
       role: "user",
       content: input,
@@ -1459,15 +1581,14 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
     };
 
     setMessages((prev) => [...prev, userMessage]);
-    const currentInput = input.trim();
-    
+
     // 디버깅: 실제 사용자 입력 확인
     console.log("📝 사용자 입력:", {
       original: input,
       trimmed: currentInput,
       length: currentInput.length
     });
-    
+
     setInput("");
     setIsLoading(true);
 
@@ -1956,6 +2077,15 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
               console.log("✅ Planning saved successfully:", saveData.path);
               // 저장 성공 후 계획 검토 탭 새로고침 이벤트 발생
               window.dispatchEvent(new CustomEvent("planningSaved"));
+              // Planning viewer 열기
+              window.dispatchEvent(
+                new CustomEvent("planningSelected", {
+                  detail: {
+                    planningData: structuredResponse,
+                    filename: saveData.filename,
+                  },
+                })
+              );
             } else {
               const errorData = await saveResponse.json();
               console.error("❌ Planning save failed:", errorData);
@@ -1990,29 +2120,29 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
           }
           return updated;
         });
-      }
 
-      // 코드 변경사항 파싱 및 전달
-      if (assistantResponse) {
-        const { parseCodeBlocks } = await import("@/utils/codeParser");
-        // 컨텍스트 파일 목록 생성 (드롭된 파일 + 연관 파일)
-        const contextFiles = [
-          ...droppedFiles.map(f => f.path),
-          ...relatedFiles.map(f => f.path),
-        ];
-        const codeBlocks = parseCodeBlocks(assistantResponse, contextFiles);
-        
-        if (codeBlocks.length > 0) {
-          // 부모 컴포넌트에 코드 변경사항 전달
-          if (window.dispatchEvent) {
-            window.dispatchEvent(
-              new CustomEvent("codeChanges", {
-                detail: {
-                  codeBlocks,
-                  response: assistantResponse,
-                },
-              })
-            );
+        // 코드 변경사항 파싱 및 전달 (Planning phase가 아닐 때만)
+        if (assistantResponse && !isPlanningPhase) {
+          const { parseCodeBlocks } = await import("@/utils/codeParser");
+          // 컨텍스트 파일 목록 생성 (드롭된 파일 + 연관 파일)
+          const contextFiles = [
+            ...droppedFiles.map(f => f.path),
+            ...relatedFiles.map(f => f.path),
+          ];
+          const codeBlocks = parseCodeBlocks(assistantResponse, contextFiles);
+
+          if (codeBlocks.length > 0) {
+            // 부모 컴포넌트에 코드 변경사항 전달
+            if (window.dispatchEvent) {
+              window.dispatchEvent(
+                new CustomEvent("codeChanges", {
+                  detail: {
+                    codeBlocks,
+                    response: assistantResponse,
+                  },
+                })
+              );
+            }
           }
         }
       }

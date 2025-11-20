@@ -168,7 +168,7 @@ function extractPortFromViteConfig(configContent: string): number | null {
   try {
     // vite.config.js/ts에서 포트 설정 찾기
     // 예: server: { port: 3001 } 또는 port: 3001
-    const serverPortMatch = configContent.match(/server\s*:\s*\{[^}]*port\s*:\s*(\d+)/s);
+    const serverPortMatch = configContent.match(/server\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
     if (serverPortMatch) {
       return parseInt(serverPortMatch[1]);
     }
@@ -188,7 +188,7 @@ function extractPortFromWebpackConfig(configContent: string): number | null {
   try {
     // webpack.config.js/ts에서 devServer.port 설정 찾기
     // 예: devServer: { port: 3001 }
-    const devServerPortMatch = configContent.match(/devServer\s*:\s*\{[^}]*port\s*:\s*(\d+)/s);
+    const devServerPortMatch = configContent.match(/devServer\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
     if (devServerPortMatch) {
       return parseInt(devServerPortMatch[1]);
     }
@@ -202,7 +202,7 @@ function extractPortFromWebpackConfig(configContent: string): number | null {
 function extractPortFromCracoConfig(configContent: string): number | null {
   try {
     // craco.config.js/ts에서 devServer.port 설정 찾기
-    const devServerPortMatch = configContent.match(/devServer\s*:\s*\{[^}]*port\s*:\s*(\d+)/s);
+    const devServerPortMatch = configContent.match(/devServer\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
     if (devServerPortMatch) {
       return parseInt(devServerPortMatch[1]);
     }

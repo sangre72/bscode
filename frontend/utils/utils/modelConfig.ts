@@ -29,7 +29,7 @@ export const ENV_KEYS = {
  * 기본 모델 설정
  */
 export const DEFAULT_MODELS = {
-  GROK: process.env.GROK_MODEL || "grok-4-fast-reasoning",
+  GROK: process.env.GROK_MODEL || "grok-code-fast-1",
   OLLAMA: "llama3.2",
 } as const;
 

@@ -57,7 +57,7 @@ export const formatMarkdownText = (text: string): React.ReactNode => {
         // 텍스트 처리: 마크다운 헤더, 리스트, 강조 등
         const lines = part.content.split('\n');
         return (
-          <div key={idx} className="space-y-1">
+          <div key={idx} className="space-y-1 whitespace-pre-wrap">
             {lines.map((line, lineIdx) => {
               // 헤더 처리
               if (line.match(/^###\s+/)) {
@@ -151,7 +151,7 @@ export const formatAnalysisResult = (content: string): React.ReactNode => {
                     <div className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
                       아키텍처:
                     </div>
-                    <div className="text-sm text-gray-700 dark:text-gray-300">
+                    <div className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
                       {jsonData.plan.architecture}
                     </div>
                   </div>
@@ -162,7 +162,7 @@ export const formatAnalysisResult = (content: string): React.ReactNode => {
                     <div className="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">
                       세부 작업:
                     </div>
-                    <ul className="list-disc list-inside space-y-1 text-sm text-gray-700 dark:text-gray-300">
+                    <ul className="list-disc list-inside space-y-1 text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
                       {jsonData.plan.subTasks.map((task: { name?: string; description?: string }, taskIdx: number) => (
                         <li key={taskIdx}>
                           <span className="font-medium">{task.name}:</span> {task.description}

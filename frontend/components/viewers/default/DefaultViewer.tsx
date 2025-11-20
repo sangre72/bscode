@@ -56,7 +56,7 @@ export default function DefaultViewer({
           startLineNumber: error.line,
           startColumn: error.character,
           endLineNumber: error.line,
-          endColumn: error.character + (error.length || 1),
+          endColumn: error.character + 1,
           message: error.message,
           severity:
             error.severity === "error"

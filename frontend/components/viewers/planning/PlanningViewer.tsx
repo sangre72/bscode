@@ -2,7 +2,7 @@
 
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Loader2, Play, XCircle } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { StepExecutionContext, executeStep } from "./handlers/stepExecution";
 import { ExecutionLog, PlanningViewerProps, StepResult } from "./types";
@@ -32,8 +32,17 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
     });
   };
 
-  // 디버깅: codeBlocks 확인 (모든 hook은 early return 전에 호출)
+  // content가 변경될 때 모든 실행 상태 초기화
   useEffect(() => {
+    // 실행 상태 초기화
+    setExecutingSteps(new Set());
+    setExecutedSteps(new Set());
+    setStepResults(new Map());
+    setAnalysisResults(new Map());
+    setExecutionLogs(new Map());
+    setExpandedLogs(new Set());
+
+    // 디버깅: codeBlocks 확인
     try {
       const parsed = JSON.parse(content);
       if (parsed?.planning) {
@@ -57,6 +66,26 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
     }
   }, [content]);
 
+  // 파일 열기 성공 플래그 (pathExpandResult 실패 알림 억제용)
+  const suppressNextFailureRef = useRef(false);
+
+  // fileOpenedSuccessfully 이벤트 리스너: 파일이 성공적으로 열렸을 때 실패 알림 억제
+  useEffect(() => {
+    const handleFileOpenedSuccessfully = (event: Event) => {
+      console.log("파일 열기 성공 이벤트 수신, 다음 pathExpandResult 실패 알림 억제");
+      suppressNextFailureRef.current = true;
+      // 1초 후 플래그 자동 리셋 (혹시 이벤트가 안 오는 경우 대비)
+      setTimeout(() => {
+        suppressNextFailureRef.current = false;
+      }, 1000);
+    };
+
+    window.addEventListener("fileOpenedSuccessfully", handleFileOpenedSuccessfully);
+    return () => {
+      window.removeEventListener("fileOpenedSuccessfully", handleFileOpenedSuccessfully);
+    };
+  }, []);
+
   // 경로 확장 결과 리스너
   useEffect(() => {
     const handlePathExpandResult = (event: Event) => {
@@ -66,6 +95,13 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
         targetPath: string;
       }>;
       const { found, expandedPath, targetPath } = customEvent.detail;
+
+      // 파일이 성공적으로 열렸으면 실패 알림 억제
+      if (!found && suppressNextFailureRef.current) {
+        console.log("파일 열기 성공했으므로 pathExpandResult 실패 알림 억제:", targetPath);
+        suppressNextFailureRef.current = false;
+        return;
+      }
 
       if (found) {
         toast.success(`경로를 찾았습니다: ${targetPath}`, {
@@ -206,7 +242,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
             요청 내용
           </h2>
-          <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 p-3 rounded-lg">
+          <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 p-3 rounded-lg whitespace-pre-wrap">
             {metadata.userRequest || "없음"}
           </div>
         </div>
@@ -229,7 +265,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
               질문
             </h2>
-            <ul className="list-disc list-inside text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 p-3 rounded-lg space-y-1.5">
+            <ul className="list-disc list-inside text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 p-3 rounded-lg space-y-1.5 whitespace-pre-wrap">
               {planning.questions.map((q: string, idx: number) => (
                 <li key={idx}>{q}</li>
               ))}
@@ -292,7 +328,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                   </h3>
                   <div className="bg-gray-50 dark:bg-gray-800 p-2 rounded-lg space-y-1">
                     {planning.plan.filesToCreate.map((file: { path: string; reason?: string; purpose?: string }, idx: number) => (
-                      <div key={idx} className="text-xs">
+                      <div key={idx} className="text-xs whitespace-pre-wrap">
                         <span
                           className="font-mono text-blue-600 dark:text-blue-400 cursor-pointer hover:underline"
                           onClick={() => handlePathClick(file.path)}
@@ -318,7 +354,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                   </h3>
                   <div className="bg-gray-50 dark:bg-gray-800 p-2 rounded-lg space-y-1">
                     {planning.plan.filesToModify.map((file: { path: string; reason?: string; changes?: string }, idx: number) => (
-                      <div key={idx} className="text-xs">
+                      <div key={idx} className="text-xs whitespace-pre-wrap">
                         <span
                           className="font-mono text-orange-600 dark:text-orange-400 cursor-pointer hover:underline"
                           onClick={() => handlePathClick(file.path)}
@@ -343,7 +379,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                     실행 순서
                   </h3>
                   <div className="bg-gray-50 dark:bg-gray-800 p-2 rounded-lg">
-                    <ol className="list-decimal list-inside space-y-1 text-xs text-gray-700 dark:text-gray-300">
+                    <ol className="list-decimal list-inside space-y-1 text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
                       {planning.plan.executionOrder.map((step: string, idx: number) => (
                         <li key={idx}>{step}</li>
                       ))}
@@ -378,7 +414,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-2">
-                          <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                          <span className="text-sm font-medium text-gray-900 dark:text-gray-100 whitespace-pre-wrap">
                             {stepIndex + 1}. {stepDescription}
                           </span>
                           {isExecuting && (
@@ -407,7 +443,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
 
                         {/* 실행 결과 표시 */}
                         {result && (
-                          <div className={`text-xs mt-2 p-2 rounded ${
+                          <div className={`text-xs mt-2 p-2 rounded whitespace-pre-wrap ${
                             result.success
                               ? "bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
                               : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300"
@@ -466,7 +502,7 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                                     <span className="text-[10px] text-gray-500 dark:text-gray-400">
                                       {log.timestamp.toLocaleTimeString()}
                                     </span>
-                                    <span className={`font-medium ${
+                                    <span className={`font-medium whitespace-pre-wrap ${
                                       log.type === "command"
                                         ? "text-blue-700 dark:text-blue-300"
                                         : log.type === "file"
@@ -483,12 +519,12 @@ export default function PlanningViewer({ content, projectPath }: PlanningViewerP
                                     </span>
                                   </div>
                                   {log.command && (
-                                    <div className="text-xs font-mono text-gray-600 dark:text-gray-400 mt-1">
+                                    <div className="text-xs font-mono text-gray-600 dark:text-gray-400 mt-1 whitespace-pre-wrap">
                                       명령어: {log.command}
                                     </div>
                                   )}
                                   {log.filePath && (
-                                    <div className="text-xs font-mono text-gray-600 dark:text-gray-400 mt-1">
+                                    <div className="text-xs font-mono text-gray-600 dark:text-gray-400 mt-1 whitespace-pre-wrap">
                                       파일: {log.filePath}
                                     </div>
                                   )}

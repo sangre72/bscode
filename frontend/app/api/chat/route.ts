@@ -14,7 +14,10 @@ import {
   getModelConfig,
   getOllamaUrl,
 } from "@/utils/modelConfig";
-import { buildSystemPrompt, enhanceUserPrompt } from "@/utils/promptBuilder";
+import {
+  buildSystemPrompt,
+  enhanceUserPrompt,
+} from "@/utils/promptBuilder";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -45,53 +48,39 @@ async function handleGrokRequest(
   simpleMode: boolean = false
 ) {
   const apiKey = getGrokApiKey();
+  const messages = [];
 
-    // 시스템 프롬프트 추가 (일반 질문 모드에서는 간단한 프롬프트 사용)
-    const systemPrompt = simpleMode ? SIMPLE_MODE_SYSTEM_PROMPT : buildSystemPrompt();
-    const enhancedMessage = simpleMode
-      ? message
-      : enhanceUserPrompt(
-          message,
-          contextFiles,
-          projectType,
-          history // 대화 히스토리를 컨텍스트로 전달
-        );
+  if (simpleMode) {
+    // Simple mode: 간단한 대화
+    messages.push({ role: "system", content: SIMPLE_MODE_SYSTEM_PROMPT });
+    messages.push(...history.map((msg: { role: string; content: string }) => ({
+      role: msg.role === "user" ? "user" : "assistant",
+      content: msg.content,
+    })));
+    messages.push({ role: "user", content: message });
+  } else {
+    // Enhanced mode: 상세한 시스템 프롬프트와 향상된 사용자 프롬프트 사용
+    const systemPrompt = buildSystemPrompt();
+    const enhancedMessage = enhanceUserPrompt(message, contextFiles, projectType, history);
 
-    // 대화 히스토리를 Grok API 형식으로 변환
-    const messages = [];
-    
-    // 시스템 프롬프트는 항상 포함 (대화 컨텍스트 유지를 위해)
-    messages.push({
-      role: "system" as const,
-      content: systemPrompt,
-    });
-    
-    // 기존 히스토리 추가 (최근 N개 메시지만 유지하여 토큰 제한 방지)
+    // 시스템 프롬프트 추가
+    messages.push({ role: "system", content: systemPrompt });
+
+    // 대화 히스토리 추가 (최근 메시지만)
     const recentHistory = history.slice(-DEFAULT_CONFIG.MAX_HISTORY_MESSAGES);
-    messages.push(
-      ...recentHistory.map((msg: { role: string; content: string }) => ({
-        role: msg.role === "user" ? "user" : "assistant",
-        content: msg.content,
-      }))
-    );
-    
-    // 컨텍스트 파일 내용이 있으면 메시지에 포함
+    messages.push(...recentHistory.map((msg: { role: string; content: string }) => ({
+      role: msg.role === "user" ? "user" : "assistant",
+      content: msg.content,
+    })));
+
+    // 현재 컨텍스트가 있으면 메시지에 포함
     let finalMessage = enhancedMessage;
-    
-    // package.json이 컨텍스트 파일에 있으면 내용 요청
-    if (contextFiles && contextFiles.some(f => f.name === "package.json" || f.path.includes("package.json"))) {
-      // package.json 내용은 이미 fileContents에 포함되어 있을 수 있음
-      // 하지만 명시적으로 언급
-      finalMessage += `\n\n**Note:** package.json content is provided in the context files section above. Please analyze it to understand the project structure and dependencies.`;
+    if (context) {
+      finalMessage = `현재 편집 중인 코드 컨텍스트:\n\`\`\`\n${context}\n\`\`\`\n\n${enhancedMessage}`;
     }
-    
-    // 현재 메시지 추가
-    messages.push({
-      role: "user" as const,
-      content: context
-        ? `현재 편집 중인 코드 컨텍스트:\n\`\`\`\n${context}\n\`\`\`\n\n${finalMessage}`
-        : finalMessage,
-    });
+
+    messages.push({ role: "user", content: finalMessage });
+  }
 
   // 모델별 설정 가져오기 (통합 관리)
   const modelConfig = getModelConfig(model, "default");

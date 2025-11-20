@@ -3,8 +3,13 @@
 import ChatPanel from "@/components/ChatPanel";
 import ProjectSidebar from "@/components/ProjectSidebar";
 import ResourceViewer from "@/components/ResourceViewer";
-import Terminal from "@/components/Terminal";
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
+
+// Terminal을 동적으로 import하여 SSR 비활성화
+const Terminal = dynamic(() => import("@/components/Terminal"), {
+  ssr: false,
+});
 
 interface ProjectInfo {
   name: string;
@@ -633,6 +638,225 @@ export default function Home() {
     };
   }, []);
 
+  // 파일 경로 클릭 이벤트 리스너
+  useEffect(() => {
+    const handleFilePathClick = async (event: Event) => {
+      const customEvent = event as CustomEvent<{ path: string }>;
+      const { path: filePath } = customEvent.detail;
+
+      if (!filePath) {
+        console.warn("파일 경로가 비어있습니다");
+        return;
+      }
+
+      if (!currentProject) {
+        console.warn("파일 경로 클릭: 프로젝트가 선택되지 않았습니다");
+        return;
+      }
+
+      console.log("파일 경로 클릭:", {
+        filePath,
+        projectPath: currentProject.path,
+        projectName: currentProject.name
+      });
+
+      // 경로 정규화
+      const normalizedPath = normalizePath(filePath);
+      console.log("정규화된 경로:", normalizedPath);
+
+      // 이미 열린 파일인지 확인
+      const existingIndex = openFiles.findIndex((f) => normalizePath(f.path) === normalizedPath);
+      if (existingIndex !== -1) {
+        console.log("이미 열린 파일:", normalizedPath, "인덱스:", existingIndex);
+        setActiveFileIndex(existingIndex);
+        return;
+      }
+
+      // Helper function: 경로 유사도 계산
+      const calculatePathSimilarity = (path1: string, path2: string): number => {
+        const segments1 = path1.split('/').filter(s => s);
+        const segments2 = path2.split('/').filter(s => s);
+
+        // 파일명이 다르면 0점
+        if (segments1[segments1.length - 1] !== segments2[segments2.length - 1]) {
+          return 0;
+        }
+
+        // 일치하는 세그먼트 개수 계산
+        let matchCount = 0;
+        const maxLength = Math.max(segments1.length, segments2.length);
+
+        for (let i = 0; i < Math.min(segments1.length - 1, segments2.length - 1); i++) {
+          if (segments1[i] === segments2[i]) {
+            matchCount++;
+          }
+        }
+
+        // 유사도 점수 (0~1)
+        return matchCount / (maxLength - 1);
+      };
+
+      // Helper function: 파일 이름으로 유사한 파일 검색
+      const findSimilarFile = async (originalPath: string): Promise<string | null> => {
+        const fileName = originalPath.split('/').pop();
+        if (!fileName) return null;
+
+        console.log("파일 검색 시작:", fileName);
+
+        try {
+          const searchResponse = await fetch('/api/files/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName,
+              projectPath: currentProject.path
+            })
+          });
+
+          if (searchResponse.ok) {
+            const { files } = await searchResponse.json();
+            console.log("검색된 파일들:", files);
+
+            if (files && files.length > 0) {
+              // 원본 경로와 가장 유사한 파일 찾기
+              let bestMatch = files[0];
+              let bestScore = calculatePathSimilarity(originalPath, files[0].path);
+
+              for (const file of files) {
+                const score = calculatePathSimilarity(originalPath, file.path);
+                console.log("유사도 점수:", { path: file.path, score });
+
+                if (score > bestScore) {
+                  bestScore = score;
+                  bestMatch = file;
+                }
+              }
+
+              console.log("가장 유사한 파일:", { path: bestMatch.path, score: bestScore });
+              return bestMatch.path;
+            }
+          }
+        } catch (error) {
+          console.error("파일 검색 오류:", error);
+        }
+
+        return null;
+      };
+
+      // Helper function: 파일 열기 시도
+      const tryOpenFile = async (pathToTry: string, isRetry: boolean = false): Promise<boolean> => {
+        const apiUrl = `/api/files/read?path=${encodeURIComponent(pathToTry)}&projectPath=${encodeURIComponent(currentProject.path)}`;
+        console.log("파일 읽기 API 호출:", apiUrl);
+
+        const response = await fetch(apiUrl);
+        if (response.ok) {
+          const data = await response.json();
+          console.log("파일 읽기 성공:", { path: pathToTry, hasContent: !!data.content });
+
+          const fileName = pathToTry.split("/").pop() || pathToTry;
+          const fileType = getFileType(
+            pathToTry,
+            data.isImage,
+            data.isVideo,
+            data.isAudio,
+            data.isFont,
+            data.isDocument,
+            data.encoding
+          );
+          const newFile: OpenFile = {
+            path: pathToTry,
+            name: fileName,
+            content: data.content || "",
+            language: getLanguageFromExtension(pathToTry),
+            fileType,
+            encoding: data.encoding,
+            mimeType: ["image", "video", "audio", "font", "document"].includes(fileType)
+              ? getMimeType(pathToTry)
+              : undefined,
+          };
+
+          setOpenFiles((prev) => {
+            const newFiles = [...prev, newFile];
+            const newActiveIndex = newFiles.length - 1;
+            setActiveFileIndex(newActiveIndex);
+            console.log("파일 추가 완료:", { path: pathToTry, totalFiles: newFiles.length });
+
+            // 프로젝트별 상태 저장
+            if (currentProject) {
+              saveProjectFiles(currentProject.path, newFiles, newActiveIndex);
+            }
+
+            return newFiles;
+          });
+
+          // 재시도로 성공한 경우, pathExpandResult 실패 알림을 억제하고
+          // 올바른 경로로 filePathClick 이벤트를 다시 발생시킴
+          if (isRetry && pathToTry !== normalizedPath) {
+            console.log("파일 열기 성공, pathExpandResult 실패 알림 억제");
+            // pathExpandResult 실패 알림을 억제하는 이벤트 발생
+            window.dispatchEvent(
+              new CustomEvent("fileOpenedSuccessfully", {
+                detail: {
+                  originalPath: normalizedPath,
+                  actualPath: pathToTry
+                },
+              })
+            );
+
+            // 올바른 경로로 파일 트리 확장 재요청
+            console.log("올바른 경로로 파일 트리 확장 재요청:", pathToTry);
+            setTimeout(() => {
+              window.dispatchEvent(
+                new CustomEvent("filePathClick", {
+                  detail: { path: pathToTry },
+                })
+              );
+            }, 100);
+          }
+
+          return true;
+        }
+
+        return false;
+      };
+
+      try {
+        // 1단계: 원본 경로로 시도
+        console.log("1단계: 원본 경로로 파일 열기 시도");
+        const opened = await tryOpenFile(normalizedPath, false);
+
+        if (!opened) {
+          // 2단계: 파일 이름으로 유사한 파일 검색
+          console.log("2단계: 유사한 파일 검색");
+          const similarPath = await findSimilarFile(normalizedPath);
+
+          if (similarPath) {
+            console.log("유사한 파일 발견:", {
+              원본: normalizedPath,
+              발견: similarPath
+            });
+
+            const retryOpened = await tryOpenFile(similarPath, true);
+
+            if (!retryOpened) {
+              alert(`유사한 파일을 찾았지만 열 수 없습니다.\n\n원본 경로: ${normalizedPath}\n찾은 경로: ${similarPath}`);
+            }
+          } else {
+            alert(`파일을 열 수 없습니다.\n\n경로: ${normalizedPath}\n프로젝트: ${currentProject.path}\n\n유사한 파일도 찾을 수 없습니다.`);
+          }
+        }
+      } catch (error) {
+        console.error("파일 열기 오류:", error);
+        alert(`파일을 열 수 없습니다: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
+      }
+    };
+
+    window.addEventListener("filePathClick", handleFilePathClick);
+    return () => {
+      window.removeEventListener("filePathClick", handleFilePathClick);
+    };
+  }, [currentProject, openFiles]);
+
   return (
     <div 
       ref={containerRef}
@@ -686,47 +910,6 @@ export default function Home() {
         </div>
         <Terminal
           projectPath={currentProject?.path}
-          onCommand={async (command: string) => {
-            console.log("🚀 Terminal onCommand 호출:", { command, projectPath: currentProject?.path });
-            
-            if (!currentProject?.path) {
-              console.error("❌ 프로젝트 경로가 없습니다");
-              return { stdout: "", stderr: "프로젝트 경로가 없습니다.", success: false };
-            }
-
-            try {
-              console.log("📡 API 요청 전송:", { command, projectPath: currentProject.path });
-              const response = await fetch("/api/commands/execute", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  command: command,
-                  projectPath: currentProject.path,
-                }),
-              });
-
-              console.log("📥 API 응답 상태:", response.status, response.ok);
-              const data = await response.json();
-              console.log("📥 API 응답 데이터:", data);
-
-              if (!response.ok) {
-                console.error("❌ API 오류:", data);
-              }
-
-              return {
-                stdout: data.stdout || "",
-                stderr: data.stderr || data.error || "",
-                success: response.ok && data.success,
-              };
-            } catch (error) {
-              console.error("❌ fetch 오류:", error);
-              return {
-                stdout: "",
-                stderr: error instanceof Error ? error.message : String(error),
-                success: false,
-              };
-            }
-          }}
         />
       </div>
 

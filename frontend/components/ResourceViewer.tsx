@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, File, FileCode, FileText, Image as ImageIcon, Music, Save, Type, Video, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import AudioViewer from "./viewers/audio/AudioViewer";
 import DefaultViewer from "./viewers/default/DefaultViewer";
@@ -77,6 +77,54 @@ export default function ResourceViewer({
     severity: "error" | "warning" | "info";
   }>>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [hoveredTabIndex, setHoveredTabIndex] = useState<number | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+  const hideTooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Tooltip 경로 복사 핸들러
+  const handleCopyPath = useCallback((relativePath: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    // 전체 경로 생성
+    const fullPath = projectPath
+      ? `${projectPath}/${relativePath}`.replace(/\/+/g, '/') // 중복 슬래시 제거
+      : relativePath;
+
+    navigator.clipboard.writeText(fullPath);
+    toast.success("경로가 복사되었습니다", {
+      description: fullPath,
+    });
+    setHoveredTabIndex(null);
+    setTooltipPosition(null);
+  }, [projectPath]);
+
+  // Tooltip 숨기기 (지연)
+  const hideTooltipWithDelay = useCallback(() => {
+    if (hideTooltipTimeoutRef.current) {
+      clearTimeout(hideTooltipTimeoutRef.current);
+    }
+    hideTooltipTimeoutRef.current = setTimeout(() => {
+      setHoveredTabIndex(null);
+      setTooltipPosition(null);
+    }, 200); // 200ms 지연
+  }, []);
+
+  // Tooltip 숨기기 취소
+  const cancelHideTooltip = useCallback(() => {
+    if (hideTooltipTimeoutRef.current) {
+      clearTimeout(hideTooltipTimeoutRef.current);
+      hideTooltipTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hideTooltipTimeoutRef.current) {
+        clearTimeout(hideTooltipTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // TypeScript 파일의 경우 진단 정보 가져오기
   useEffect(() => {
@@ -350,14 +398,34 @@ export default function ResourceViewer({
                 <div
                   key={index}
                   onClick={() => onFileSelect(index)}
-                  className={`flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors border-b-2 flex-shrink-0 cursor-pointer ${
+                  onMouseEnter={(e) => {
+                    cancelHideTooltip();
+                    setHoveredTabIndex(index);
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setTooltipPosition({
+                      x: rect.left + rect.width / 2,
+                      y: rect.bottom + 5,
+                    });
+                  }}
+                  onMouseLeave={hideTooltipWithDelay}
+                  className={`relative flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors border-b-2 flex-shrink-0 cursor-pointer max-w-[150px] ${
                     index === activeFileIndex
                       ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 border-blue-500"
                       : "text-gray-600 dark:text-gray-400 border-transparent hover:text-gray-900 dark:hover:text-gray-200"
                   }`}
                 >
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onFileClose(index);
+                    }}
+                    className="hover:bg-gray-200 dark:hover:bg-gray-700 rounded p-0.5 flex-shrink-0"
+                    type="button"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
                   <Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="whitespace-nowrap" title={file.path}>
+                  <span className="whitespace-nowrap overflow-hidden text-ellipsis">
                     {(() => {
                       // 같은 이름의 파일이 여러 개 열려있는지 확인
                       const sameNameCount = openFiles.filter(f => f.name === file.name).length;
@@ -370,16 +438,6 @@ export default function ResourceViewer({
                       return file.name;
                     })()}
                   </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFileClose(index);
-                    }}
-                    className="ml-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded p-0.5 flex-shrink-0"
-                    type="button"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
                 </div>
               );
             })}
@@ -404,6 +462,33 @@ export default function ResourceViewer({
 
       {/* 컨텐츠 영역 */}
       <div className="flex-1 overflow-hidden">{renderContent()}</div>
+
+      {/* Tooltip */}
+      {hoveredTabIndex !== null && tooltipPosition && (() => {
+        const relativePath = openFiles[hoveredTabIndex].path;
+        const fullPath = projectPath
+          ? `${projectPath}/${relativePath}`.replace(/\/+/g, '/')
+          : relativePath;
+
+        return (
+          <div
+            className="fixed z-50 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg shadow-lg cursor-pointer hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors max-w-md"
+            style={{
+              left: `${tooltipPosition.x}px`,
+              top: `${tooltipPosition.y}px`,
+              transform: 'translateX(-50%)',
+            }}
+            onClick={(e) => handleCopyPath(relativePath, e)}
+            onMouseEnter={cancelHideTooltip}
+            onMouseLeave={hideTooltipWithDelay}
+          >
+            <div className="font-medium mb-1">경로 복사하려면 클릭</div>
+            <div className="text-xs text-gray-300 dark:text-gray-400 break-all">
+              {fullPath}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

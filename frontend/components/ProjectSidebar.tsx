@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GripVertical, Plus, FolderPlus, Server, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, GripVertical, Plus, FolderPlus, Server, ExternalLink, Play, Square, Loader2, Terminal as TerminalIcon, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import FileTree, { FileTreeRef } from "./FileTree";
 import PlanningReview from "./PlanningReview";
@@ -38,6 +38,10 @@ export default function ProjectSidebar({
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [isLoadingTree, setIsLoadingTree] = useState(false);
   const [serverInfo, setServerInfo] = useState<{ command: string; port: number; url: string } | null>(null);
+  const [isServerRunning, setIsServerRunning] = useState(false);
+  const [isServerLoading, setIsServerLoading] = useState(false);
+  const [serverLogs, setServerLogs] = useState<string[]>([]);
+  const [showServerLogs, setShowServerLogs] = useState(false);
   const [topSectionHeight, setTopSectionHeight] = useState(300); // 기본 높이 (px)
   const [isResizing, setIsResizing] = useState(false);
   // localStorage에서 저장된 탭 상태 불러오기
@@ -85,6 +89,17 @@ export default function ProjectSidebar({
       setServerInfo(null);
     }
   }, [currentProject, recentProjects]);
+
+  // 서버 상태를 주기적으로 확인 (10초마다)
+  useEffect(() => {
+    if (!serverInfo?.port) return;
+
+    const intervalId = setInterval(() => {
+      checkServerStatus(serverInfo.port);
+    }, 10000); // 10초마다 확인
+
+    return () => clearInterval(intervalId);
+  }, [serverInfo?.port]);
 
   // 탭 변경 시 localStorage에 저장
   useEffect(() => {
@@ -179,12 +194,139 @@ export default function ProjectSidebar({
       if (response.ok) {
         const data = await response.json();
         setServerInfo(data.serverInfo || null);
+
+        // 서버 상태 확인
+        if (data.serverInfo?.port) {
+          checkServerStatus(data.serverInfo.port);
+        }
       }
     } catch (error) {
       console.error("Error loading server info:", error);
       setServerInfo(null);
     }
   };
+
+  const checkServerStatus = async (port: number) => {
+    try {
+      const response = await fetch("/api/dev-server/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ port }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setIsServerRunning(data.running);
+      }
+    } catch (error) {
+      console.error("Error checking server status:", error);
+      setIsServerRunning(false);
+    }
+  };
+
+  const handleStartServer = async () => {
+    if (!currentProjectInfo) return;
+
+    setIsServerLoading(true);
+    try {
+      const response = await fetch("/api/dev-server/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectPath: currentProjectInfo.path }),
+      });
+
+      if (response.ok) {
+        setIsServerRunning(true);
+        // 2초 후 상태 재확인
+        setTimeout(() => {
+          if (serverInfo?.port) {
+            checkServerStatus(serverInfo.port);
+          }
+        }, 2000);
+      } else {
+        const error = await response.json();
+        alert(`서버 시작 실패: ${error.error || "알 수 없는 오류"}`);
+      }
+    } catch (error) {
+      console.error("Error starting server:", error);
+      alert("서버를 시작할 수 없습니다.");
+    } finally {
+      setIsServerLoading(false);
+    }
+  };
+
+  const handleStopServer = async () => {
+    if (!currentProjectInfo || !serverInfo?.port) return;
+
+    setIsServerLoading(true);
+    try {
+      const response = await fetch("/api/dev-server/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectPath: currentProjectInfo.path,
+          port: serverInfo.port,
+        }),
+      });
+
+      if (response.ok) {
+        setIsServerRunning(false);
+      } else {
+        const error = await response.json();
+        alert(`서버 중지 실패: ${error.error || "알 수 없는 오류"}`);
+      }
+    } catch (error) {
+      console.error("Error stopping server:", error);
+      alert("서버를 중지할 수 없습니다.");
+    } finally {
+      setIsServerLoading(false);
+    }
+  };
+
+  const fetchServerLogs = async () => {
+    if (!currentProjectInfo) return;
+
+    try {
+      const response = await fetch(
+        `/api/dev-server/logs?projectPath=${encodeURIComponent(currentProjectInfo.path)}`
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setServerLogs(data.logs || []);
+      }
+    } catch (error) {
+      console.error("Error fetching server logs:", error);
+    }
+  };
+
+  const clearServerLogs = async () => {
+    if (!currentProjectInfo) return;
+
+    try {
+      const response = await fetch("/api/dev-server/logs", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectPath: currentProjectInfo.path }),
+      });
+
+      if (response.ok) {
+        setServerLogs([]);
+      }
+    } catch (error) {
+      console.error("Error clearing server logs:", error);
+    }
+  };
+
+  // 서버 로그 주기적으로 가져오기 (서버 실행 중일 때만)
+  useEffect(() => {
+    if (!isServerRunning || !showServerLogs) return;
+
+    fetchServerLogs();
+    const intervalId = setInterval(fetchServerLogs, 2000); // 2초마다 로그 갱신
+
+    return () => clearInterval(intervalId);
+  }, [isServerRunning, showServerLogs, currentProjectInfo?.path]);
 
   const handleProjectClick = async (project: ProjectInfo) => {
     setCurrentProjectInfo(project);
@@ -391,9 +533,48 @@ export default function ProjectSidebar({
             {/* 개발 서버 정보 - 제목 바로 밑에 표시 */}
             {serverInfo && (
               <div className="mb-3 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <Server className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
-                  <span className="text-xs font-medium text-gray-700 dark:text-gray-300">개발 서버</span>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
+                    <span className="text-xs font-medium text-gray-700 dark:text-gray-300">개발 서버</span>
+                    {isServerRunning && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-green-600 dark:text-green-400">
+                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                        실행 중
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {isServerRunning ? (
+                      <button
+                        onClick={handleStopServer}
+                        disabled={isServerLoading}
+                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="서버 중지"
+                      >
+                        {isServerLoading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Square className="w-3 h-3" />
+                        )}
+                        중지
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleStartServer}
+                        disabled={isServerLoading}
+                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded hover:bg-green-100 dark:hover:bg-green-900/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="서버 시작"
+                      >
+                        {isServerLoading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Play className="w-3 h-3" />
+                        )}
+                        시작
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="space-y-1 text-xs">
                   <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
@@ -415,6 +596,47 @@ export default function ProjectSidebar({
                     <span className="text-gray-500 dark:text-gray-500">(포트 {serverInfo.port})</span>
                   </div>
                 </div>
+                {/* 서버 로그 토글 버튼 */}
+                <div className="mt-2">
+                  <button
+                    onClick={() => {
+                      setShowServerLogs(!showServerLogs);
+                      if (!showServerLogs) {
+                        fetchServerLogs();
+                      }
+                    }}
+                    className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    <TerminalIcon className="w-3 h-3" />
+                    {showServerLogs ? "로그 숨기기" : "로그 보기"}
+                  </button>
+                </div>
+                {/* 서버 로그 표시 */}
+                {showServerLogs && (
+                  <div className="mt-2 bg-black dark:bg-gray-950 rounded border border-gray-300 dark:border-gray-600 overflow-hidden">
+                    <div className="flex items-center justify-between px-2 py-1 bg-gray-800 dark:bg-gray-900 border-b border-gray-700">
+                      <span className="text-xs font-medium text-gray-300">서버 로그</span>
+                      <button
+                        onClick={clearServerLogs}
+                        className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+                        title="로그 지우기"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div className="p-2 h-40 overflow-y-auto font-mono text-[10px] text-green-400 whitespace-pre-wrap">
+                      {serverLogs.length === 0 ? (
+                        <div className="text-gray-500">로그가 없습니다</div>
+                      ) : (
+                        serverLogs.map((log, index) => (
+                          <div key={index} className="leading-relaxed">
+                            {log}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <button
