@@ -177,38 +177,37 @@ function loadProjectFiles(projectPath: string): { files: OpenFile[]; activeIndex
 }
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [currentProject, setCurrentProject] = useState<ProjectInfo | null>(null);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activeFileIndex, setActiveFileIndex] = useState(0);
-  // localStorage에서 저장된 사이드바 너비 복원 (초기값 계산)
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    if (typeof window !== "undefined") {
-      const savedWidth = localStorage.getItem("sidebarWidth");
-      if (savedWidth) {
-        const width = parseInt(savedWidth, 10);
-        if (width > 0) {
-          return width;
-        }
-      }
-    }
-    return 256; // 기본 너비 (px) - w-64와 동일
-  });
-  // localStorage에서 저장된 채팅창 너비 복원 (초기값 계산)
-  const [chatPanelWidth, setChatPanelWidth] = useState(() => {
-    if (typeof window !== "undefined") {
-      const savedWidth = localStorage.getItem("chatPanelWidth");
-      if (savedWidth) {
-        const width = parseInt(savedWidth, 10);
-        if (width > 0) {
-          return width;
-        }
-      }
-    }
-    return 400; // 기본 너비 (px)
-  });
+  // localStorage에서 저장된 사이드바 너비 복원 (초기값은 기본값으로 설정)
+  const [sidebarWidth, setSidebarWidth] = useState(256); // 기본 너비 (px) - w-64와 동일
+  // localStorage에서 저장된 채팅창 너비 복원 (초기값은 기본값으로 설정)
+  const [chatPanelWidth, setChatPanelWidth] = useState(400); // 기본 너비 (px)
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isResizingChat, setIsResizingChat] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 클라이언트에서만 렌더링되도록 mounted 상태 관리
+  useEffect(() => {
+    setMounted(true);
+    // localStorage에서 저장된 너비 복원
+    const savedSidebarWidth = localStorage.getItem("sidebarWidth");
+    if (savedSidebarWidth) {
+      const width = parseInt(savedSidebarWidth, 10);
+      if (width > 0) {
+        setSidebarWidth(width);
+      }
+    }
+    const savedChatWidth = localStorage.getItem("chatPanelWidth");
+    if (savedChatWidth) {
+      const width = parseInt(savedChatWidth, 10);
+      if (width > 0) {
+        setChatPanelWidth(width);
+      }
+    }
+  }, []);
 
   // 사이드바 너비 리사이징 핸들러
   useEffect(() => {
@@ -857,8 +856,13 @@ export default function Home() {
     };
   }, [currentProject, openFiles]);
 
+  // SSR 비활성화: 클라이언트에서만 렌더링
+  if (!mounted) {
+    return null;
+  }
+
   return (
-    <div 
+    <div
       ref={containerRef}
       className="flex h-screen w-screen overflow-hidden bg-gray-50 dark:bg-gray-900"
     >

@@ -384,67 +384,71 @@ export default function ResourceViewer({
     <div className="flex flex-col h-full">
       {/* 탭 영역 */}
       {openFiles.length > 0 && (
-        <div 
-          className="flex items-center gap-1 px-2 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 overflow-x-auto overflow-y-hidden"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'rgb(156 163 175) rgb(229 231 235)',
-          }}
-        >
-          <div className="flex items-center gap-1 min-w-max">
-            {openFiles.map((file, index) => {
-              const Icon = getFileIcon(file.fileType);
-              return (
-                <div
-                  key={index}
-                  onClick={() => onFileSelect(index)}
-                  onMouseEnter={(e) => {
-                    cancelHideTooltip();
-                    setHoveredTabIndex(index);
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    setTooltipPosition({
-                      x: rect.left + rect.width / 2,
-                      y: rect.bottom + 5,
-                    });
-                  }}
-                  onMouseLeave={hideTooltipWithDelay}
-                  className={`relative flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors border-b-2 flex-shrink-0 cursor-pointer max-w-[150px] ${
-                    index === activeFileIndex
-                      ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 border-blue-500"
-                      : "text-gray-600 dark:text-gray-400 border-transparent hover:text-gray-900 dark:hover:text-gray-200"
-                  }`}
-                >
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onFileClose(index);
+        <div className="flex items-center bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+          {/* 탭 스크롤 영역 */}
+          <div
+            className="flex-1 flex items-center gap-1 px-2 overflow-x-auto overflow-y-hidden"
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: 'rgb(156 163 175) rgb(229 231 235)',
+            }}
+          >
+            <div className="flex items-center gap-1 min-w-max">
+              {openFiles.map((file, index) => {
+                const Icon = getFileIcon(file.fileType);
+                return (
+                  <div
+                    key={file.path}
+                    onClick={() => onFileSelect(index)}
+                    onMouseEnter={(e) => {
+                      cancelHideTooltip();
+                      setHoveredTabIndex(index);
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setTooltipPosition({
+                        x: rect.left + rect.width / 2,
+                        y: rect.bottom + 5,
+                      });
                     }}
-                    className="hover:bg-gray-200 dark:hover:bg-gray-700 rounded p-0.5 flex-shrink-0"
-                    type="button"
+                    onMouseLeave={hideTooltipWithDelay}
+                    className={`relative flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors border-b-2 flex-shrink-0 cursor-pointer max-w-[150px] ${
+                      index === activeFileIndex
+                        ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 border-blue-500"
+                        : "text-gray-600 dark:text-gray-400 border-transparent hover:text-gray-900 dark:hover:text-gray-200"
+                    }`}
                   >
-                    <X className="w-3 h-3" />
-                  </button>
-                  <Icon className="w-4 h-4 flex-shrink-0" />
-                  <span className="whitespace-nowrap overflow-hidden text-ellipsis">
-                    {(() => {
-                      // 같은 이름의 파일이 여러 개 열려있는지 확인
-                      const sameNameCount = openFiles.filter(f => f.name === file.name).length;
-                      if (sameNameCount > 1) {
-                        // 디렉토리 경로 표시
-                        const dirPath = file.path.substring(0, file.path.lastIndexOf("/")) || ".";
-                        const dirName = dirPath.split("/").pop() || dirPath;
-                        return `${file.name} (${dirName})`;
-                      }
-                      return file.name;
-                    })()}
-                  </span>
-                </div>
-              );
-            })}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onFileClose(index);
+                      }}
+                      className="hover:bg-gray-200 dark:hover:bg-gray-700 rounded p-0.5 flex-shrink-0"
+                      type="button"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                    <Icon className="w-4 h-4 flex-shrink-0" />
+                    <span className="whitespace-nowrap overflow-hidden text-ellipsis">
+                      {(() => {
+                        // 같은 이름의 파일이 여러 개 열려있는지 확인
+                        const sameNameCount = openFiles.filter(f => f.name === file.name).length;
+                        if (sameNameCount > 1) {
+                          // 디렉토리 경로 표시
+                          const dirPath = file.path.substring(0, file.path.lastIndexOf("/")) || ".";
+                          const dirName = dirPath.split("/").pop() || dirPath;
+                          return `${file.name} (${dirName})`;
+                        }
+                        return file.name;
+                      })()}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          {/* 저장 버튼 */}
+
+          {/* 저장 버튼 - 항상 고정 표시 */}
           {activeFile && projectPath && (activeFile.fileType === "text" || activeFile.fileType === "planning" || activeFile.fileType === "diff") && (
-            <div className="flex items-center gap-2 ml-auto px-2 flex-shrink-0">
+            <div className="flex items-center gap-2 px-2 flex-shrink-0">
               <button
                 onClick={handleSave}
                 disabled={isSaving}
@@ -464,7 +468,7 @@ export default function ResourceViewer({
       <div className="flex-1 overflow-hidden">{renderContent()}</div>
 
       {/* Tooltip */}
-      {hoveredTabIndex !== null && tooltipPosition && (() => {
+      {hoveredTabIndex !== null && tooltipPosition && openFiles[hoveredTabIndex] && (() => {
         const relativePath = openFiles[hoveredTabIndex].path;
         const fullPath = projectPath
           ? `${projectPath}/${relativePath}`.replace(/\/+/g, '/')

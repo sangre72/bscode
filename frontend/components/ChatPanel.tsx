@@ -347,15 +347,10 @@ function PathClickableContent({ content }: { content: string }) {
 }
 
 export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile }: ChatPanelProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content: "안녕하세요! 코드 어시스턴트입니다. 무엇을 도와드릴까요?",
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const initializedRef = useRef(false);
   const [projectStructure, setProjectStructure] = useState<{
     treeText?: string;
     configFiles?: Record<string, string>;
@@ -408,6 +403,7 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const chatAreaRef = useRef<HTMLDivElement>(null);
+  const isSendingRef = useRef(false);
 
   // 드롭다운 외부 클릭 시 닫기
   useEffect(() => {
@@ -428,6 +424,18 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [showModelSelector]);
+
+  // 초기 환영 메시지 추가 (한 번만 실행)
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      setMessages([{
+        role: "assistant",
+        content: "안녕하세요! 코드 어시스턴트입니다. 무엇을 도와드릴까요?",
+        timestamp: new Date(),
+      }]);
+    }
+  }, []);
 
   // 구조화된 응답을 사용자 친화적인 형식으로 변환
   interface StructuredResponse {
@@ -1494,7 +1502,11 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
   };
 
   const handleSend = async (useSimpleMode: boolean = false) => {
-    if (!input.trim() || isLoading) return;
+    // 중복 전송 방지: ref로 동기적으로 체크
+    if (!input.trim() || isLoading || isSendingRef.current) return;
+
+    // 즉시 플래그 설정 (동기적)
+    isSendingRef.current = true;
 
     const currentInput = input.trim();
 
@@ -2156,6 +2168,7 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
+      isSendingRef.current = false; // 플래그 리셋
     }
   };
 
