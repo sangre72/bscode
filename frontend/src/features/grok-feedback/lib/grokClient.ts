@@ -53,8 +53,8 @@ export class GrokClient {
   async chat(params: GrokRequestParams): Promise<GrokResponse> {
     const defaultParams = {
       model: 'grok-4-fast-reasoning',
-      temperature: 0.7,
-      max_tokens: 32000,
+      temperature: 0.3,
+      max_tokens: 4000,
       stream: false,
     };
 

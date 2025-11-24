@@ -13,6 +13,7 @@ import {
   getGrokApiKey,
   getModelConfig,
   getOllamaUrl,
+  getLMStudioUrl,
 } from "@/utils/modelConfig";
 import {
   buildSystemPrompt,
@@ -30,6 +31,8 @@ export async function POST(request: NextRequest) {
     // Provider에 따라 다른 API 호출
     if (selectedProvider === "ollama") {
       return await handleOllamaRequest(message, history, context, selectedModel, contextFiles, projectType, simpleMode);
+    } else if (selectedProvider === "lmstudio") {
+      return await handleLMStudioRequest(message, history, context, selectedModel, contextFiles, projectType, simpleMode);
     } else {
       return await handleGrokRequest(message, history, context, selectedModel, contextFiles, projectType, simpleMode);
     }
@@ -334,6 +337,145 @@ async function handleOllamaRequest(
     console.error("Ollama connection error:", error);
       return NextResponse.json(
       { error: ERROR_MESSAGES.OLLAMA_CONNECTION_FAILED(ollamaUrl) },
+      { status: 500 }
+    );
+  }
+}
+
+async function handleLMStudioRequest(
+  message: string,
+  history: any[],
+  context: string | undefined,
+  model: string,
+  contextFiles: any[] | undefined,
+  projectType: string | undefined,
+  simpleMode: boolean = false
+) {
+  // 32K 컨텍스트 길이를 활용 - 원래 프롬프트 사용 (제한 없음)
+  const messages = [];
+
+  if (simpleMode) {
+    // Simple mode: 간단한 대화
+    messages.push({ role: "system", content: SIMPLE_MODE_SYSTEM_PROMPT });
+    // 전체 히스토리 포함 (제한 없음)
+    messages.push(...history.map((msg: { role: string; content: string }) => ({
+      role: msg.role === "user" ? "user" : "assistant",
+      content: msg.content,
+    })));
+    messages.push({ role: "user", content: message });
+  } else {
+    // Enhanced mode: 상세한 시스템 프롬프트와 향상된 사용자 프롬프트 사용
+    const systemPrompt = buildSystemPrompt();
+    const enhancedMessage = enhanceUserPrompt(message, contextFiles, projectType, history);
+
+    // 시스템 프롬프트 추가
+    messages.push({ role: "system", content: systemPrompt });
+
+    // 전체 대화 히스토리 포함 (제한 제거)
+    messages.push(...history.map((msg: { role: string; content: string }) => ({
+      role: msg.role === "user" ? "user" : "assistant",
+      content: msg.content,
+    })));
+
+    // 현재 컨텍스트가 있으면 메시지에 포함
+    let finalMessage = enhancedMessage;
+    if (context) {
+      finalMessage = `현재 편집 중인 코드 컨텍스트:\n\`\`\`\n${context}\n\`\`\`\n\n${enhancedMessage}`;
+    }
+
+    messages.push({ role: "user", content: finalMessage });
+  }
+
+  // LM Studio API 호출 (OpenAI 호환)
+  const lmstudioBaseUrl = getLMStudioUrl();
+  const lmstudioUrl = `${lmstudioBaseUrl}/v1/chat/completions`;
+
+  try {
+    const response = await fetch(lmstudioUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 3000, // LM Studio 응답 길이
+        stream: true,
+        // 컨텍스트 길이 설정 (큰 모델용)
+        num_ctx: 32768, // 32K 컨텍스트
+      }),
+    });
+
+    if (!response.ok) {
+      const errorMessage = await parseApiErrorResponse(
+        response,
+        `LM Studio API 오류: ${response.statusText}`
+      );
+      return NextResponse.json(
+        { error: errorMessage },
+        { status: response.status }
+      );
+    }
+
+    // 스트리밍 응답 생성 (OpenAI 형식)
+    const stream = new ReadableStream({
+      async start(controller) {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+
+        if (!reader) {
+          controller.close();
+          return;
+        }
+
+        try {
+          let buffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              const trimmedLine = line.trim();
+              if (!trimmedLine || trimmedLine === "data: [DONE]") continue;
+
+              if (trimmedLine.startsWith("data: ")) {
+                try {
+                  const jsonStr = trimmedLine.slice(6);
+                  const data = JSON.parse(jsonStr);
+                  const content = data.choices?.[0]?.delta?.content || "";
+
+                  if (content) {
+                    controller.enqueue(encodeStreamMessage({ content }));
+                  }
+                } catch (e) {
+                  // JSON 파싱 실패 무시
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Stream error:", error);
+          controller.error(error);
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: createStreamResponseHeaders(),
+    });
+  } catch (error) {
+    const lmstudioBaseUrl = getLMStudioUrl();
+    console.error("LM Studio connection error:", error);
+    return NextResponse.json(
+      { error: `LM Studio에 연결할 수 없습니다. ${lmstudioBaseUrl} 에서 LM Studio가 실행 중인지 확인하세요.` },
       { status: 500 }
     );
   }

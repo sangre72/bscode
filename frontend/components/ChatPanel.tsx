@@ -20,7 +20,7 @@ interface ModelOption {
   id: string;
   name: string;
   description: string;
-  provider: "grok" | "ollama";
+  provider: "grok" | "ollama" | "lmstudio";
   tokens?: string;
 }
 
@@ -374,14 +374,15 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
     }
     return "grok-code-fast-1";
   });
-  const [selectedProvider, setSelectedProvider] = useState<"grok" | "ollama">(() => {
+  const [selectedProvider, setSelectedProvider] = useState<"grok" | "ollama" | "lmstudio">(() => {
     if (typeof window !== "undefined") {
-      const savedProvider = localStorage.getItem("selected-provider") as "grok" | "ollama" | null;
+      const savedProvider = localStorage.getItem("selected-provider") as "grok" | "ollama" | "lmstudio" | null;
       return savedProvider || "grok";
     }
     return "grok";
   });
   const [ollamaModels, setOllamaModels] = useState<ModelOption[]>(COMMON_OLLAMA_MODELS);
+  const [lmstudioModels, setLmstudioModels] = useState<ModelOption[]>([]);
   const [customOllamaModel, setCustomOllamaModel] = useState("");
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -1079,6 +1080,40 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
     fetchOllamaModels();
   }, []);
 
+  // LM Studio 모델 로딩
+  useEffect(() => {
+    const fetchLMStudioModels = async () => {
+      try {
+        // 백엔드 API를 통해 LM Studio 모델 목록 조회 (CORS 우회)
+        const response = await fetch("/api/lmstudio/models");
+        if (response.ok) {
+          const data = await response.json();
+          const models: ModelOption[] = (data.data || []).map((m: { id: string }) => ({
+            id: m.id,
+            name: m.id,
+            description: "LM Studio 모델",
+            provider: "lmstudio" as const,
+          }));
+
+          if (models.length > 0) {
+            setLmstudioModels(models);
+            console.log(`✅ LM Studio 모델 ${models.length}개 로딩됨:`, models.map(m => m.id));
+
+            // 자동 선택은 하지 않음 - 사용자가 명시적으로 선택하도록
+          } else {
+            console.log("⚠️ LM Studio에 로딩된 모델이 없습니다.");
+          }
+        } else {
+          const errorData = await response.json();
+          console.error("❌ LM Studio 모델 로딩 실패:", errorData.error);
+        }
+      } catch (error) {
+        console.error("❌ LM Studio API 호출 오류:", error);
+      }
+    };
+    fetchLMStudioModels();
+  }, []);
+
   // Ollama 모델 목록 로드 후 저장된 모델이 Ollama인 경우 확인
   useEffect(() => {
     // Ollama 모델 목록이 로드된 후에만 실행
@@ -1099,7 +1134,7 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
   }, [ollamaModels, selectedProvider]);
 
   // 모델 변경 시 로컬 스토리지에 저장
-  const handleModelChange = (modelId: string, provider: "grok" | "ollama") => {
+  const handleModelChange = (modelId: string, provider: "grok" | "ollama" | "lmstudio") => {
     setSelectedModel(modelId);
     setSelectedProvider(provider);
     localStorage.setItem("selected-model", modelId);
@@ -2187,7 +2222,7 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
     }
   };
 
-      const allModels = [...AVAILABLE_MODELS, ...ollamaModels];
+      const allModels = [...AVAILABLE_MODELS, ...ollamaModels, ...lmstudioModels];
       const currentModel = allModels.find((m) => m.id === selectedModel && m.provider === selectedProvider);
 
   return (
@@ -2275,10 +2310,33 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
                         Grok
                       </button>
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           // Provider만 변경하고 모델은 유지 (또는 현재 선택된 Ollama 모델이 있으면 유지)
                           if (selectedProvider !== "ollama") {
-                            // Grok에서 Ollama로 전환 시, 현재 선택된 모델이 Ollama 모델 목록에 있으면 유지
+                            // Grok에서 Ollama로 전환 시, 실행 중인 Ollama 모델이 있으면 자동 선택
+                            try {
+                              const psResponse = await fetch("http://localhost:11434/api/ps");
+                              if (psResponse.ok) {
+                                const psData = await psResponse.json();
+                                const runningModels = psData.models || [];
+
+                                // 실행 중인 모델이 있으면 자동 선택
+                                if (runningModels.length > 0) {
+                                  const runningModelName = runningModels[0].name;
+                                  const runningModel = ollamaModels.find(m => m.id === runningModelName);
+
+                                  if (runningModel) {
+                                    console.log(`🔄 실행 중인 Ollama 모델 자동 선택: ${runningModelName}`);
+                                    handleModelChange(runningModelName, "ollama");
+                                    return;
+                                  }
+                                }
+                              }
+                            } catch (error) {
+                              console.log("실행 중인 모델 확인 실패:", error);
+                            }
+
+                            // 실행 중인 모델이 없으면, 현재 선택된 모델이 Ollama 목록에 있는지 확인
                             const currentModelInOllama = ollamaModels.find(m => m.id === selectedModel);
                             if (currentModelInOllama) {
                               setSelectedProvider("ollama");
@@ -2298,6 +2356,48 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
                         }`}
                       >
                         Ollama
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (selectedProvider !== "lmstudio") {
+                            // LM Studio로 전환 시, 로딩된 모델 확인
+                            try {
+                              const response = await fetch("/api/lmstudio/models");
+                              if (response.ok) {
+                                const data = await response.json();
+                                const models = data.data || [];
+
+                                if (models.length > 0) {
+                                  const firstModel = models[0];
+                                  console.log(`🔄 LM Studio 모델 자동 선택: ${firstModel.id}`);
+                                  handleModelChange(firstModel.id, "lmstudio");
+                                  return;
+                                }
+                              }
+                            } catch (error) {
+                              console.error("❌ LM Studio 모델 확인 실패:", error);
+                            }
+
+                            // 실행 중인 모델이 없으면, 현재 선택된 모델이 LM Studio 목록에 있는지 확인
+                            const currentModelInLMStudio = lmstudioModels.find(m => m.id === selectedModel);
+                            if (currentModelInLMStudio) {
+                              setSelectedProvider("lmstudio");
+                            } else if (lmstudioModels.length > 0) {
+                              // 없으면 첫 번째 LM Studio 모델로 변경
+                              handleModelChange(lmstudioModels[0].id, "lmstudio");
+                            } else {
+                              // LM Studio 모델이 없으면 provider만 변경
+                              setSelectedProvider("lmstudio");
+                            }
+                          }
+                        }}
+                        className={`flex-1 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                          selectedProvider === "lmstudio"
+                            ? "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300"
+                            : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                        }`}
+                      >
+                        LM Studio
                       </button>
                     </div>
                   </div>
@@ -2388,6 +2488,39 @@ export default function ChatPanel({ codeContext = "", projectPath, onOpenProfile
                           </button>
                         </div>
                       </div>
+                    </>
+                  )}
+
+                  {/* LM Studio 모델 목록 */}
+                  {selectedProvider === "lmstudio" && (
+                    <>
+                      {lmstudioModels.length > 0 ? (
+                        <>
+                          <div className="px-3 py-1 text-xs text-gray-500 dark:text-gray-400 mb-1">
+                            로딩된 모델 ({lmstudioModels.length}개)
+                          </div>
+                          {lmstudioModels.map((model) => (
+                            <button
+                              key={model.id}
+                              onClick={() => handleModelChange(model.id, "lmstudio")}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                                selectedModel === model.id && selectedProvider === "lmstudio"
+                                  ? "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300"
+                                  : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                              }`}
+                            >
+                              <div className="font-medium">{model.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
+                                {model.description}
+                              </div>
+                            </button>
+                          ))}
+                        </>
+                      ) : (
+                        <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
+                          LM Studio에 로딩된 모델이 없습니다.
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

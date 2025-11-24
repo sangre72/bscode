@@ -14,6 +14,7 @@ export interface ModelConfig {
 export const API_ENDPOINTS = {
   GROK: "https://api.x.ai/v1/chat/completions",
   OLLAMA: process.env.OLLAMA_URL || "http://localhost:11434",
+  LMSTUDIO: process.env.LMSTUDIO_BASE_URL || "http://localhost:1234",
 } as const;
 
 /**
@@ -22,6 +23,7 @@ export const API_ENDPOINTS = {
 export const ENV_KEYS = {
   GROK_API_KEY: "GROK_API_KEY",
   OLLAMA_URL: "OLLAMA_URL",
+  LMSTUDIO_BASE_URL: "LMSTUDIO_BASE_URL",
   GROK_MODEL: "GROK_MODEL",
 } as const;
 
@@ -97,6 +99,13 @@ export function getOllamaUrl(): string {
 }
 
 /**
+ * LM Studio URL 가져오기
+ */
+export function getLMStudioUrl(): string {
+  return API_ENDPOINTS.LMSTUDIO;
+}
+
+/**
  * 모델별 max_tokens 설정
  * @param model 모델 이름 (예: "grok-4-reasoning", "grok-beta", "grok-3")
  * @param useCase 사용 사례에 따른 토큰 조정 (기본값: "default")
@@ -120,13 +129,13 @@ export function getMaxTokens(model: string, useCase: "default" | "analysis" | "s
   let baseTokens = 4000; // 기본값
 
   if (model.includes("reasoning")) {
-    baseTokens = 32000; // reasoning 모델은 긴 응답을 위해 더 많은 토큰 할당
+    baseTokens = 4000; // reasoning 모델은 긴 응답을 위해 더 많은 토큰 할당
   } else if (model.includes("grok-4") || model.includes("grok-beta")) {
-    baseTokens = 16000; // Grok 4 모델은 중간 수준의 토큰 할당
+    baseTokens = 4000; // Grok 4 모델은 중간 수준의 토큰 할당
   } else if (model.includes("grok-3")) {
-    baseTokens = 8000; // Grok 3 모델
+    baseTokens = 4000; // Grok 3 모델
   } else if (model.includes("grok-2")) {
-    baseTokens = 6000; // Grok 2 모델
+    baseTokens = 4000; // Grok 2 모델
   } else if (model.includes("grok-code")) {
     baseTokens = 4000; // Grok Code 모델
   }
