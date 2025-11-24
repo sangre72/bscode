@@ -54,7 +54,7 @@ export class GrokClient {
     const defaultParams = {
       model: 'grok-4-fast-reasoning',
       temperature: 0.3,
-      max_tokens: 4000,
+      max_tokens: 32000,
       stream: false,
     };
 

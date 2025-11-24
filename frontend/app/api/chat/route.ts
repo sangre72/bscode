@@ -272,7 +272,7 @@ async function handleOllamaRequest(
         stream: DEFAULT_CONFIG.STREAM, // 스트리밍 활성화
         options: {
           temperature: 0.7,
-          num_predict: 4000,
+          num_predict: 32000,
         },
       }),
     });

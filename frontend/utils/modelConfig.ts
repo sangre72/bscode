@@ -126,18 +126,18 @@ export function getMaxTokens(model: string, useCase: "default" | "analysis" | "s
   const multiplier = useCaseMultiplier[useCase] || 1.0;
 
   // 모델별 기본 max_tokens
-  let baseTokens = 4000; // 기본값
+  let baseTokens = 32000; // 기본값
 
   if (model.includes("reasoning")) {
-    baseTokens = 4000; // reasoning 모델은 긴 응답을 위해 더 많은 토큰 할당
+    baseTokens = 32000; // reasoning 모델은 긴 응답을 위해 더 많은 토큰 할당
   } else if (model.includes("grok-4") || model.includes("grok-beta")) {
-    baseTokens = 4000; // Grok 4 모델은 중간 수준의 토큰 할당
+    baseTokens = 32000; // Grok 4 모델은 중간 수준의 토큰 할당
   } else if (model.includes("grok-3")) {
-    baseTokens = 4000; // Grok 3 모델
+    baseTokens = 32000; // Grok 3 모델
   } else if (model.includes("grok-2")) {
-    baseTokens = 4000; // Grok 2 모델
+    baseTokens = 32000; // Grok 2 모델
   } else if (model.includes("grok-code")) {
-    baseTokens = 4000; // Grok Code 모델
+    baseTokens = 32000; // Grok Code 모델
   }
 
   // useCase에 따라 조정
